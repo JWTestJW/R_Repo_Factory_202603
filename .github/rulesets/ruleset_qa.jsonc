@@ -1,0 +1,164 @@
+{
+  "name": "Branch(Qa) Protection Ruleset",
+
+  // ターゲットの種類 (可能な値: branch, tag)
+  "target": "branch",
+
+  // ルールセットの適用状態
+  // active: 有効 (ルールを強制する)
+  // disabled: 無効 (ルールを適用しない)
+  // evaluate: 評価モード (ルール違反を記録するが、ブロックはしない)
+  "enforcement": "active",
+
+  // バイパスリスト (Bypass list)
+  // 特定のロール、チーム、アプリにルールの無視を許可します。
+  // Organization管理者やリポジトリ管理者が緊急時にルールを無視して操作できるようにするために重要です。
+  "bypass_actors": [
+    {
+      // Repository Admin (Maintainer) role
+      // 5: Maintainer (管理者権限)
+      "actor_id": 5,
+      "actor_type": "RepositoryRole",
+      "bypass_mode": "always"
+    }
+  ],
+
+  "conditions": {
+    "ref_name": {
+      "include": ["refs/heads/qa"], // 適用対象のブランチ (例: refs/heads/main, refs/heads/feature/*)
+      "exclude": [] // 除外対象のブランチ
+    }
+  },
+  "rules": [
+    {
+      "type": "deletion" // ブランチの削除を禁止します
+    },
+    {
+      "type": "non_fast_forward" // 強制プッシュ (Force Push) を禁止します。Fast-forward 以外のプッシュは拒否されます。
+      // これにより履歴の改変が防がれます。
+    },
+    {
+      "type": "creation" // ブランチの作成を禁止します
+      // 注意: このルールが存在すると、対象名のブランチを新規作成または再作成できなくなります。
+      // 旧保護設定 (block_creations: false) と同様にする場合は、このブロックを削除してください。
+    },
+    // {
+    //   "type": "required_linear_history" // マージコミットを禁止し、一直線の履歴 (Linear history) を強制します。
+    //   // Squash merge または Rebase merge が必要になります。
+    // },
+    {
+      "type": "pull_request", // プルリクエスト (PR) を必須にします
+      "parameters": {
+        // マージに必要な承認数
+        // 0: 承認は不要だがPRは必須, 1以上: 指定数の承認が必要 (Privateリポジトリの無料版では制限機能)
+        "required_approving_review_count": 0,
+
+        // 新しいコミットがプッシュされた際に、既存の承認を取り消すか
+        // true: 取り消す (再レビューが必要), false: 取り消さない
+        "dismiss_stale_reviews_on_push": true,
+
+        // コードオーナー (CODEOWNERS) によるレビューを必須にするか (Privateリポジトリの無料版では制限機能)
+        // true: 必須, false: 任意
+        "require_code_owner_review": false,
+
+        // 最新のプッシュに対して承認を必須にするか (承認後にプッシュされた場合、再承認が必要)
+        // true: 必須, false: 任意
+        "require_last_push_approval": false,
+
+        // PR内の会話スレッドがすべて解決済みであることを必須にするか
+        // true: 必須, false: 任意
+        "required_review_thread_resolution": false,
+
+        // 許可されるマージ方法
+        // merge, squash, rebase のいずれかまたは組み合わせで指定
+        "allowed_merge_methods": [
+          "merge" // MergeCommit を許可
+        ]
+      }
+    },
+    {
+      "type": "required_status_checks", // マージ前のステータスチェック (CI) 合格を必須にします (Privateリポジトリの無料版では制限機能)
+      "parameters": {
+        // マージする前に、ブランチがターゲットブランチ(main)に対して最新であることを要求するか
+        // true: 最新である必要がある (遅れている場合 update が必要), false: 厳密には要求しない
+        "strict_required_status_checks_policy": false,
+
+        // 必須とするステータスチェックのリスト
+        // 配列内にオブジェクトとして指定 (例: {"context": "build-job"})
+        "required_status_checks": [
+          { "context": "check-pr-direction" }, // PR の方向けチェック
+          { "context": "check-renv-lock" } // renv.lock の整合性チェック
+        ]
+      }
+    }
+
+    // --- 以下はUIで設定可能なその他のルール (Enterprise/Pro向けまたは高度な機能) ---
+
+    // [Enterprise/Public] コミット署名の必須化 (Required signatures)
+    // コミットが検証済みの署名を持つことを要求します
+    // { "type": "required_signatures" },
+
+    // [Enterprise/Public] マージキュー (Merge Queue)
+    // PRマージ時にキューに入れ、CIを通して順次マージします
+    // {
+    //   "type": "merge_queue",
+    //   "parameters": {
+    //     "check_response_timeout_minutes": 60,
+    //     "grouping_strategy": "ALLGREEN",
+    //     "max_entries_to_build": 5,
+    //     "max_entries_to_merge": 5,
+    //     "merge_method": "SQUASH",
+    //     "min_entries_to_merge": 0,
+    //     "min_entries_to_merge_wait_minutes": 10
+    //   }
+    // },
+
+    // [Enterprise] デプロイの必須化 (Required deployments)
+    // マージ前に特定の環境へのデプロイ成功を要求します
+    // {
+    //   "type": "required_deployments",
+    //   "parameters": {
+    //     "required_deployment_environments": ["production", "staging"]
+    //   }
+    // },
+
+    // [Metadata] コミットメッセージパターン (Commit message pattern)
+    // コミットメッセージが特定のパターン(Regex)に一致することを要求します
+    // {
+    //   "type": "commit_message_pattern",
+    //   "parameters": {
+    //     "name": "Check Issue ID",
+    //     "operator": "regex", // starts_with, ends_with, contains, regex
+    //     "pattern": "^ABC-\\d+: ",
+    //     "negate": false
+    //   }
+    // },
+
+    // [Metadata] コミット作成者メール (Commit author email pattern)
+    // {
+    //   "type": "commit_author_email_pattern",
+    //   "parameters": { "operator": "ends_with", "pattern": "@mycompany.com" }
+    // },
+
+    // [Metadata] コミッターメール (Committer email pattern)
+    // {
+    //   "type": "committer_email_pattern",
+    //   "parameters": { "operator": "ends_with", "pattern": "@mycompany.com" }
+    // },
+
+    // [Enterprise] ワークフローの必須化 (Require workflows)
+    // 特定のワークフローファイルの実行と成功を要求します (repository_idの指定が必要です)
+    // {
+    //   "type": "workflows",
+    //   "parameters": {
+    //     "workflows": [
+    //       { "path": ".github/workflows/ci.yml", "ref": "refs/heads/main", "repository_id": 123456 }
+    //     ]
+    //   }
+    // },
+
+    // [Lock Branch] 更新のブロック (Lock branch)
+    // ブランチへのプッシュを読み取り専用にします (metadata更新などを除く)
+    // { "type": "update" }
+  ]
+}

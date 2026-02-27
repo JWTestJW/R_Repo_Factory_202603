@@ -1,0 +1,617 @@
+name: Repo Factory - Create Repository
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      template_name:
+        description: "テンプレートリポジトリ名"
+        required: true
+        default: "AEGIS_R_template_20260108_1"
+      _repo_name_hint:
+        description: |
+          入力不要。リポジトリ名は下記6または7項目をハイフン（-）で連結して自動生成されます。
+          AEGIS-[env_code]-[repo_type]-[molecule_no]-([study_no]-)[reporting_event]-[environment_name]
+          ※ AEGIS は固定、study_no は Sタイプのみ必須、Mタイプでは省略されます。
+        required: false
+        default: "例：AEGIS-PRD-S-RO1234567-STD0001-ReportingEvent1-dev"
+      env_code:
+        description: "〇〇説明用、自由に設定可能（例: PRD, ZTEST等）"
+        required: true
+        default: "PRD"
+      repo_type:
+        description: "リポジトリタイプ"
+        required: true
+        type: choice
+        options:
+          - S
+          - M
+        default: "S"
+      molecule_no:
+        description: "MoleculeNo（SタイプもMタイプも必須）"
+        required: true
+        default: "RO1234567"
+      study_no:
+        description: "StudyNo（Sタイプ必須、Mタイプ不要）"
+        required: false
+        default: "STD0001"
+      reporting_event:
+        description: "自由に設定可能、フォルダ名に対応必要"
+        required: true
+        default: "ReportingEvent1"
+      environment_name:
+        description: "環境名、self-hosted Runner のラベルに対応必要"
+        required: true
+        type: choice
+        options:
+          - dev
+          - qa
+          - prod
+        default: "dev"
+      codeowner:
+        description: "Code Owner（UserIDまたはTeamSlug、カンマ区切りで複数指定可）"
+        required: true
+        default: "jiangtestgm"
+      team_slug:
+        description: "Team Slug（Team名ではありません）、カンマ区切りで複数指定可"
+        required: true
+        default: "test001"
+      team_mode:
+        description: "開発モード (Single: 個人/管理者のみ, Team: 複数人/レビュー必須)"
+        required: true
+        default: "Team"
+        type: choice
+        options:
+          - Team
+          - Single
+
+env:
+  OTHERS_BRANCHES: ""
+  VALIDATED_CODEOWNERS: ""
+
+jobs:
+  create-repo:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Generate App Token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.CREATE_REPO_APP_ID }}
+          private-key: ${{ secrets.CREATE_REPO_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Set GH_TOKEN
+        run: echo "GH_TOKEN=${{ steps.app-token.outputs.token }}" >> $GITHUB_ENV
+
+      - name: Configure Target Branches
+        run: |
+          # ---------------------------------------------------
+          # Configuration: Define extra branches here
+          # ---------------------------------------------------
+          # メインブランチ以外に作成するブランチ（スペース区切り）
+          echo "OTHER_BRANCHES=dev qa" >> $GITHUB_ENV
+
+      - name: 入力パラメータの検証
+        id: validate
+        run: |
+          # ---------------------------------------------------
+          # 1. テンプレートの存在チェック
+          # ---------------------------------------------------
+          TEMPLATE_NAME="${{ github.event.inputs.template_name }}"
+          echo "テンプレートを検証中: $TEMPLATE_NAME"
+
+          STATUS_TPL=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            https://api.github.com/repos/${{ github.repository_owner }}/$TEMPLATE_NAME)
+
+          if [ "$STATUS_TPL" != "200" ]; then
+            echo "❌ テンプレートリポジトリ($TEMPLATE_NAME)が見つかりません"
+            exit 1
+          fi
+          echo "✅ テンプレート確認OK"
+
+          # ---------------------------------------------------
+          # 2. Code Ownerの存在チェック（組織メンバー or Team）
+          # ---------------------------------------------------
+          INPUT_OWNERS="${{ github.event.inputs.codeowner }}"
+          ORG_NAME="${{ github.repository_owner }}"
+          echo "Code Ownerを検証中（ユーザーまたはチーム）: $INPUT_OWNERS"
+
+          # カンマで分割してループ
+          CLEAN_OWNERS=$(echo "$INPUT_OWNERS" | tr ',' ' ' | xargs)
+
+          # CODEOWNERSファイル用フォーマット文字列の構築
+          PREPARED_OWNERS=""
+
+          for OWNER in $CLEAN_OWNERS; do
+            echo "  Checking: $OWNER"
+            
+            # ---------------------------------------------------
+            # 1. ユーザーチェック (/members/{user})
+            # ---------------------------------------------------
+            # まず組織のメンバーかどうかを確認
+            STATUS_MEMBER=$(curl -s -o /dev/null -w "%{http_code}" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              https://api.github.com/orgs/$ORG_NAME/members/$OWNER)
+
+            if [ "$STATUS_MEMBER" == "204" ]; then
+              # メンバーであれば、正規の大文字小文字(login)を取得
+              USER_JSON=$(curl -s \
+                -H "Authorization: Bearer $GH_TOKEN" \
+                https://api.github.com/users/$OWNER)
+              
+              CANONICAL_USER=$(echo "$USER_JSON" | jq -r .login)
+
+              if [ "$CANONICAL_USER" != "null" ] && [ -n "$CANONICAL_USER" ]; then
+                echo "    ✅ Found User: $CANONICAL_USER (Input: $OWNER)"
+                PREPARED_OWNERS="$PREPARED_OWNERS @$CANONICAL_USER"
+                continue
+              fi
+            fi
+            
+            # ---------------------------------------------------
+            # 2. チームチェック (/teams/{slug})
+            # ---------------------------------------------------
+            # チーム情報を取得して正規のSlugを確認
+            TEAM_JSON=$(curl -s \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              https://api.github.com/orgs/$ORG_NAME/teams/$OWNER)
+            
+            # 成功時(200 OK)はJSONにslugが含まれる。失敗時はmessage等。
+            CANONICAL_SLUG=$(echo "$TEAM_JSON" | jq -r .slug)
+
+            if [ "$CANONICAL_SLUG" != "null" ] && [ -n "$CANONICAL_SLUG" ]; then
+              echo "    ✅ Found Team: $CANONICAL_SLUG (Input: $OWNER)"
+              PREPARED_OWNERS="$PREPARED_OWNERS @$ORG_NAME/$CANONICAL_SLUG"
+              continue
+            fi
+
+            # ---------------------------------------------------
+            # 3. エラー処理
+            # ---------------------------------------------------
+            # どちらもNGの場合
+            echo "❌ '$OWNER' は、組織($ORG_NAME)のメンバーでもチームでもありません。"
+            exit 1
+          done
+
+          echo "✅ Code Owner确认OK. Prepared string: $PREPARED_OWNERS"
+          # GITHUB_ENVに出力して後続のステップで利用可能にする
+          echo "VALIDATED_CODEOWNERS=$PREPARED_OWNERS" >> $GITHUB_ENV
+
+          # ---------------------------------------------------
+          # 3. リポジトリ名のルールチェック
+          # ---------------------------------------------------
+          # _repo_name_hintの説明に従い、入力パラメータからリポジトリ名を組み立てる
+          ENV_CODE="${{ github.event.inputs.env_code }}"
+          REPO_TYPE="${{ github.event.inputs.repo_type }}"
+          MOLECULE_NO="${{ github.event.inputs.molecule_no }}"
+          STUDY_NO="${{ github.event.inputs.study_no }}"
+          REPORTING_EVENT="${{ github.event.inputs.reporting_event }}"
+          ENVIRONMENT_NAME="${{ github.event.inputs.environment_name }}"
+
+          if [ "$REPO_TYPE" == "S" ]; then
+            REPO_NAME="AEGIS-${ENV_CODE}-${REPO_TYPE}-${MOLECULE_NO}-${STUDY_NO}-${REPORTING_EVENT}-${ENVIRONMENT_NAME}"
+          else
+            REPO_NAME="AEGIS-${ENV_CODE}-${REPO_TYPE}-${MOLECULE_NO}-${REPORTING_EVENT}-${ENVIRONMENT_NAME}"
+          fi
+
+          echo "リポジトリ名を検証中: $REPO_NAME"
+
+          # ルール 1：文字種チェック（英数字, _, - のみ）
+          if ! [[ "$REPO_NAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+            echo "❌ リポジトリ名に使用できない文字が含まれています"
+            exit 1
+          fi
+
+          # ルール 2：構成チェック（新仕様 S/M タイプ）
+          # 例:
+          #   Sタイプ: AEGIS-PRD-S-RO1234567-STD0001-ReportingEvent1-dev
+          #   Mタイプ: AEGIS-ZTEST-M-RO1234567-ReportingEvent2-dev
+          IFS='-' read -ra PARTS <<< "$REPO_NAME"
+          if [ ${#PARTS[@]} -lt 3 ]; then
+            echo "❌ リポジトリ名の形式が正しくありません（分割後の要素数不足）"
+            exit 1
+          fi
+          TYPE="${PARTS[2]}"
+          if [ "$TYPE" == "S" ]; then
+            if [ ${#PARTS[@]} -lt 7 ]; then
+              echo "❌ Sタイプのリポジトリ名の形式が正しくありません（要素数不足）"
+              exit 1
+            fi
+          elif [ "$TYPE" == "M" ]; then
+            if [ ${#PARTS[@]} -lt 6 ]; then
+              echo "❌ Mタイプのリポジトリ名の形式が正しくありません（要素数不足）"
+              exit 1
+            fi
+          else
+            echo "❌ リポジトリ名の第3部分はSまたはMである必要があります"
+            exit 1
+          fi
+
+          # ルール 3：長さ制限 (Githubの推奨に従う、最大100文字とする)
+          if [ ${#REPO_NAME} -gt 100 ]; then
+            echo "❌ リポジトリ名が長すぎます（>100）"
+            exit 1
+          fi
+
+          # ルール 4：既存在チェック
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            https://api.github.com/repos/${{ github.repository_owner }}/$REPO_NAME)
+
+          if [ "$STATUS" == "200" ]; then
+            echo "❌ リポジトリは既に存在します"
+            exit 1
+          fi
+
+          echo "✅ 検証に合格しました"
+          echo "REPO_NAME=$REPO_NAME" >> $GITHUB_ENV
+
+      - name: テンプレートからリポジトリを作成
+        run: |
+          curl -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ github.repository_owner }}/${{ github.event.inputs.template_name }}/generate \
+            -d @- <<EOF
+          {
+            "name": "${{ env.REPO_NAME }}",
+            "owner": "${{ github.repository_owner }}",
+            "private": false
+          }
+          EOF
+
+      - name: リポジトリ作成完了待機 (Wait for creation)
+        run: |
+          TARGET_REPO="${{ github.repository_owner }}/${{ env.REPO_NAME }}"
+          echo "リポジトリの作成完了を待機中: $TARGET_REPO"
+
+          MAX_RETRIES=10
+          SLEEP_SEC=5
+
+          for ((i=1; i<=MAX_RETRIES; i++)); do
+            echo "Attempt $i/$MAX_RETRIES: Checking repo and main branch existence..."
+            
+            # リポジトリのmainブランチ情報を取得して存在確認 (200 OK なら作成完了とみなす)
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              https://api.github.com/repos/$TARGET_REPO/branches/main)
+            
+            if [ "$HTTP_CODE" == "200" ]; then
+              echo "✅ リポジトリ作成完了とmainブランチの存在を確認しました。"
+              exit 0
+            fi
+            
+            echo "Waiting ${SLEEP_SEC}s..."
+            sleep $SLEEP_SEC
+          done
+
+          echo "❌ タイムアウト: リポジトリの作成を確認できませんでした。"
+          exit 1
+
+      - name: PRマージポリシーの設定 (Merge Commit のみ許可)
+        run: |
+          OWNER="${{ github.repository_owner }}"
+          REPO_NAME="${{ env.REPO_NAME }}"
+          echo "Configuring PR merge strategies for $OWNER/$REPO_NAME (merge commit only)..."
+
+          HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" \
+            -X PATCH \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/$OWNER/$REPO_NAME" \
+            -d '{
+              "allow_merge_commit": true,
+              "allow_squash_merge": false,
+              "allow_rebase_merge": false
+            }')
+
+          HTTP_CODE=$(echo "$HTTP_RESPONSE" | tail -n1)
+          BODY=$(echo "$HTTP_RESPONSE" | sed '$d')
+
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "✅ PR merge strategies configured (only merge commit enabled)."
+          else
+            echo "❌ Failed to configure PR merge strategies. Status: $HTTP_CODE"
+            echo "Body: $BODY"
+            exit 1
+          fi
+
+      - name: カスタムプロパティ (StudyNo) を設定
+        run: |
+          # Custom Property 設定 (PATCH /repos/{owner}/{repo}/custom-properties/values)
+          # 注意: 事前にOrganization側で 'StudyNo' というプロパティが定義されている必要があります
+
+          # APIバージョンヘッダーを追加して curl を実行
+          curl -L \
+            -X PATCH \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/orgs/${{ github.repository_owner }}/properties/values \
+            -d @- <<EOF
+          {
+            "repository_names": [
+              "${{ env.REPO_NAME }}"
+            ],
+            "properties": [
+              {
+                "property_name": "StudyNo",
+                "value": "${{ github.event.inputs.study_no }}"
+              }
+            ]
+          }
+          EOF
+
+      - name: TeamにWrite権限を付与
+        run: |
+          INPUT_TEAMS="${{ github.event.inputs.team_slug }}"
+          REPO_NAME="${{ env.REPO_NAME }}"
+          OWNER="${{ github.repository_owner }}"
+
+          echo "Assigning Write permission to teams: $INPUT_TEAMS for repo: $REPO_NAME"
+
+          # カンマで分割してループ
+          CLEAN_TEAMS=$(echo "$INPUT_TEAMS" | tr ',' ' ' | xargs)
+
+          for TEAM_SLUG in $CLEAN_TEAMS; do
+            echo "Processing team: $TEAM_SLUG"
+
+            # チームに push (Write) 権限を付与
+            # PUT /orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+              -X PUT \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              -d '{"permission":"push"}' \
+              "https://api.github.com/orgs/$OWNER/teams/$TEAM_SLUG/repos/$OWNER/$REPO_NAME")
+
+            if [ "$STATUS" == "204" ]; then
+              echo "✅ Team '$TEAM_SLUG' added with Write access."
+            else
+              echo "❌ Failed to add team '$TEAM_SLUG'. Status code: $STATUS"
+              echo "   Check if team slug is correct and app has permissions."
+              exit 1
+            fi
+          done
+
+      - name: CODEOWNERS作成とPush (Actions有効化)
+        run: |
+          REPO_NAME="${{ env.REPO_NAME }}"
+          # 検証ステップで作成・整形済みの変数を使用
+          FORMATTED_OWNERS="${{ env.VALIDATED_CODEOWNERS }}"
+
+          echo "CODEOWNERSファイルを生成してPushします (Actionsのアクティベーションも兼ねる)"
+          echo "Using owners: $FORMATTED_OWNERS"
+
+          # 作業用ディレクトリ
+          WORK_DIR="temp_work_$REPO_NAME"
+          mkdir -p $WORK_DIR
+          cd $WORK_DIR
+
+          # 新リポジトリをclone (GH_TOKEN使用)
+          git clone --depth 1 "https://x-access-token:$GH_TOKEN@github.com/${{ github.repository_owner }}/$REPO_NAME.git" .
+
+          echo "# This file is automatically generated by Repo Factory" > .github/CODEOWNERS
+          echo "*" $FORMATTED_OWNERS >> .github/CODEOWNERS
+
+          # Commit & Push
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add .github/CODEOWNERS
+          git commit -m "chore: setup CODEOWNERS and activate actions"
+          git push origin main
+
+          echo "✅ CODEOWNERSのPush完了。Actionsがアクティブ化されました。"
+
+          # 後始末
+          cd ..
+          rm -rf $WORK_DIR
+
+      - name: 分支作成 (dev/qa)
+        run: |
+          # ---------------------------------------------------
+          # 分支作成: dev, qa... (基于main)
+          # ---------------------------------------------------
+          REPO_NAME="${{ env.REPO_NAME }}"
+
+          # 作業用ディレクトリ
+          WORK_DIR="temp_branch_$REPO_NAME"
+          mkdir -p $WORK_DIR
+          cd $WORK_DIR
+
+          # 新リポジトリをclone (GH_TOKEN使用)
+          git clone --depth 1 "https://x-access-token:$GH_TOKEN@github.com/${{ github.repository_owner }}/$REPO_NAME.git" .
+
+          # Git用户设定 (统一使用 github-actions[bot])
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          echo "Creating additional branches: ${{ env.OTHER_BRANCHES }}"
+
+          for BRANCH in ${{ env.OTHER_BRANCHES }}; do
+            echo "Creating branch: $BRANCH"
+            git checkout -b $BRANCH
+            git push origin $BRANCH
+            # Reset to main for next branch creation (base on main)
+            git checkout main
+          done
+
+          echo "✅ 分支作成完了"
+
+          # 後始末
+          cd ..
+          rm -rf $WORK_DIR
+
+      - name: Rulesetの設定 (Import from file)
+        run: |
+          TARGET_REPO="${{ github.repository_owner }}/${{ env.REPO_NAME }}"
+          TEAM_MODE="${{ github.event.inputs.team_mode }}"
+          echo "Setting up rulesets for $TARGET_REPO (Mode: $TEAM_MODE)"
+
+          # ルールセット定義ファイルのディレクトリ
+          FACTORY_REPO="${{ github.repository }}" 
+          RULES_DIR=".github/rulesets"
+          TARGET_BRANCHES="main ${{ env.OTHER_BRANCHES }}"
+
+          echo "Target branches for rulesets: $TARGET_BRANCHES"
+
+          for BRANCH in $TARGET_BRANCHES; do
+            FILE="ruleset_${BRANCH}.jsonc"
+            echo "---------------------------------------------------"
+            echo "Checking ruleset file for branch: $BRANCH ($FILE)"
+            
+            CONTENT_URL="https://api.github.com/repos/$FACTORY_REPO/contents/$RULES_DIR/$FILE"
+            
+            # 存在確認
+            FILE_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" $CONTENT_URL)
+            
+            if [ "$FILE_STATUS" != "200" ]; then
+              echo "ℹ️ No ruleset file found for '$BRANCH' (Status: $FILE_STATUS). Skipping."
+              continue
+            fi
+
+            echo "✅ Found ruleset file for $BRANCH. Downloading..."
+            
+            # ダウンロード
+            DOWNLOAD_RESP=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" $CONTENT_URL)
+              
+            if ! echo "$DOWNLOAD_RESP" | grep -q '"content":'; then
+               echo "❌ Error: Failed to parse content for $FILE"
+               exit 1
+            fi
+            
+            # JSON抽出とデコード (jqを使用)
+            echo "$DOWNLOAD_RESP" | jq -r .content | base64 -d > temp_ruleset.json
+            
+            # コメント削除と整形
+            # sedで // 以降を削除。文字列内の // を誤検知するリスクがあるが、
+            # 現在の定義ファイルにはURL等が含まれていないため許容する。
+            sed 's|//.*||g' temp_ruleset.json > clean_ruleset.json
+
+            # ---------------------------------------------------
+            # モードに応じたJSONの動的書き換え
+            # ---------------------------------------------------
+            if [ "$TEAM_MODE" == "Single" ]; then
+              echo "ℹ️ Single Mode detected: Disabling required approvals for $BRANCH ruleset."
+              
+              # jq を使って値を書き換える
+              # required_approving_review_count -> 0
+              # require_code_owner_review -> false
+              
+              jq '(.rules[] | select(.type == "pull_request") | .parameters.required_approving_review_count) = 0 | 
+                  (.rules[] | select(.type == "pull_request") | .parameters.require_code_owner_review) = false' \
+                  clean_ruleset.json > modified_ruleset.json
+                  
+              mv modified_ruleset.json clean_ruleset.json
+            fi
+
+            echo "Creating ruleset for branch: $BRANCH..."
+            
+            # 作成実行 (レスポンスボディも取得してエラー詳細を表示)
+            HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" \
+              -X POST \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/$TARGET_REPO/rulesets" \
+              -d @clean_ruleset.json)
+
+            # ステータスコードとボディを分離
+            HTTP_CODE=$(echo "$HTTP_RESPONSE" | tail -n1)
+            HTTP_BODY=$(echo "$HTTP_RESPONSE" | sed '$d')
+              
+            if [ "$HTTP_CODE" == "201" ]; then
+              echo "✅ Ruleset created for $BRANCH"
+            else
+              echo "❌ Failed to create ruleset for $BRANCH. Status: $HTTP_CODE"
+              echo "⬇️ Error Response Body:"
+              echo "$HTTP_BODY" | jq . || echo "$HTTP_BODY"
+              # デバッグ用に送信したJSONを表示
+              echo "⬇️ Sent JSON Payload (First 20 lines):"
+              head -n 20 clean_ruleset.json
+              exit 1 
+            fi
+          done
+
+      - name: Setup Labels (Release)
+        run: |
+          REPO_NAME="${{ env.REPO_NAME }}"
+          echo "Setting up release labels for $REPO_NAME..."
+
+          # Define Labels
+          # release:major (Red) - Significant update
+          # release:minor (Orange) - Feature update
+          # release:patch (Green) - Fix/Small update
+          # no-release (Gray) - Use when no release is needed
+
+          LABELS_JSON='[
+            {"name": "release:major", "color": "b60205", "description": "Increments major version"},
+            {"name": "release:minor", "color": "d93f0b", "description": "Increments minor version"},
+            {"name": "release:patch", "color": "0e8a16", "description": "Increments patch version"},
+            {"name": "no-release", "color": "6f7f88", "description": "Prevents release"}
+          ]'
+
+          echo "$LABELS_JSON" | jq -c '.[]' | while read -r LABEL_DATA; do
+            NAME=$(echo "$LABEL_DATA" | jq -r .name)
+            echo "Creating label: $NAME"
+            
+            # POST /repos/{owner}/{repo}/labels
+            # Capture output and status
+            HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" \
+              -X POST \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${{ github.repository_owner }}/${{ env.REPO_NAME }}/labels" \
+              -d "$LABEL_DATA")
+
+            HTTP_CODE=$(echo "$HTTP_RESPONSE" | tail -n1)
+            BODY=$(echo "$HTTP_RESPONSE" | sed '$d')
+
+            if [ "$HTTP_CODE" == "201" ]; then
+                echo "✅ Created $NAME"
+            elif [ "$HTTP_CODE" == "422" ]; then
+                echo "⚠️ Label $NAME already exists or validation failed. Body: $BODY"
+            else
+                echo "❌ Failed to create $NAME. Status: $HTTP_CODE. Body: $BODY"
+                exit 1
+            fi
+          done
+
+          echo "✅ Release labels setup complete."
+
+      - name: Initial Tag v0.0.0
+        run: |
+          REPO_NAME="${{ env.REPO_NAME }}"
+          echo "Creating initial tag v0.0.0 for $REPO_NAME..."
+
+          # 作業用ディレクトリ
+          WORK_DIR="temp_tag_$REPO_NAME"
+          mkdir -p $WORK_DIR
+          cd $WORK_DIR
+
+          # 新リポジトリをclone (GH_TOKEN使用)
+          git clone --depth 1 "https://x-access-token:$GH_TOKEN@github.com/${{ github.repository_owner }}/$REPO_NAME.git" .
+
+          # Git用户设定
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Create Tag
+          git tag v0.0.0
+          git push origin v0.0.0
+
+          echo "✅ Tag v0.0.0 created and pushed."
+
+          # 後始末
+          cd ..
+          rm -rf $WORK_DIR
