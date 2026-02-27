@@ -9,67 +9,46 @@ on:
       template_name:
         description: "テンプレートリポジトリ名"
         required: true
-        default: "AEGIS_R_template_20260108_1"
+        default: "AEGIS_R_template_20260301"
       _repo_name_hint:
         description: |
-          入力不要。リポジトリ名は下記6または7項目をハイフン（-）で連結して自動生成されます。
-          AEGIS-[env_code]-[repo_type]-[molecule_no]-([study_no]-)[reporting_event]-[environment_name]
-          ※ AEGIS は固定、study_no は Sタイプのみ必須、Mタイプでは省略されます。
+          入力不要。リポジトリ名は下記項目をハイフン（-）で連結して自動生成されます。
+          AEGIS-ZDEV/ZVAL/PRD-S/M-[molecule]-([study_no]-)[reporting_event_name]
+          ※ AEGIS は固定、study_no は Studyタイプのみ必須、Moleculeタイプでは省略されます。
         required: false
-        default: "例：AEGIS-PRD-S-RO1234567-STD0001-ReportingEvent1-dev"
-      env_code:
-        description: "〇〇説明用、自由に設定可能（例: PRD, ZTEST等）"
+        default: "例：AEGIS-PRD-S-RO1234567-STD0001-ReportingEvent1"
+      environment:
+        description: "環境名、self-hosted Runner のラベルに対応必要"
         required: true
-        default: "PRD"
+        type: choice
+        options:
+          - DEV
+          - VAL
+          - PRD
+        default: "DEV"
       repo_type:
         description: "リポジトリタイプ"
         required: true
         type: choice
         options:
-          - S
-          - M
-        default: "S"
-      molecule_no:
-        description: "MoleculeNo（SタイプもMタイプも必須）"
+          - Study
+          - Molecule
+        default: "Study"
+      molecule:
+        description: "Molecule"
         required: true
         default: "RO1234567"
       study_no:
-        description: "StudyNo（Sタイプ必須、Mタイプ不要）"
+        description: "StudyNo（Studyタイプ必須、Moleculeタイプ不要）"
         required: false
-        default: "STD0001"
-      reporting_event:
+        default: "STD-0001"
+      reporting_event_name:
         description: "自由に設定可能、フォルダ名に対応必要"
         required: true
-        default: "ReportingEvent1"
-      environment_name:
-        description: "環境名、self-hosted Runner のラベルに対応必要"
-        required: true
-        type: choice
-        options:
-          - dev
-          - qa
-          - prod
-        default: "dev"
-      codeowner:
-        description: "Code Owner（UserIDまたはTeamSlug、カンマ区切りで複数指定可）"
-        required: true
-        default: "jiangtestgm"
-      team_slug:
-        description: "Team Slug（Team名ではありません）、カンマ区切りで複数指定可"
-        required: true
-        default: "test001"
-      team_mode:
-        description: "開発モード (Single: 個人/管理者のみ, Team: 複数人/レビュー必須)"
-        required: true
-        default: "Team"
-        type: choice
-        options:
-          - Team
-          - Single
+        default: "ReportingEvent-test01"
 
 env:
   OTHERS_BRANCHES: ""
-  VALIDATED_CODEOWNERS: ""
 
 jobs:
   create-repo:
@@ -95,7 +74,7 @@ jobs:
           # メインブランチ以外に作成するブランチ（スペース区切り）
           echo "OTHER_BRANCHES=dev qa" >> $GITHUB_ENV
 
-      - name: 入力パラメータの検証
+      - name: Validate parameters and construct repository name
         id: validate
         run: |
           # ---------------------------------------------------
@@ -115,88 +94,45 @@ jobs:
           echo "✅ テンプレート確認OK"
 
           # ---------------------------------------------------
-          # 2. Code Ownerの存在チェック（組織メンバー or Team）
+          # 2. StudyNoの必須チェック
           # ---------------------------------------------------
-          INPUT_OWNERS="${{ github.event.inputs.codeowner }}"
-          ORG_NAME="${{ github.repository_owner }}"
-          echo "Code Ownerを検証中（ユーザーまたはチーム）: $INPUT_OWNERS"
-
-          # カンマで分割してループ
-          CLEAN_OWNERS=$(echo "$INPUT_OWNERS" | tr ',' ' ' | xargs)
-
-          # CODEOWNERSファイル用フォーマット文字列の構築
-          PREPARED_OWNERS=""
-
-          for OWNER in $CLEAN_OWNERS; do
-            echo "  Checking: $OWNER"
-            
-            # ---------------------------------------------------
-            # 1. ユーザーチェック (/members/{user})
-            # ---------------------------------------------------
-            # まず組織のメンバーかどうかを確認
-            STATUS_MEMBER=$(curl -s -o /dev/null -w "%{http_code}" \
-              -H "Authorization: Bearer $GH_TOKEN" \
-              https://api.github.com/orgs/$ORG_NAME/members/$OWNER)
-
-            if [ "$STATUS_MEMBER" == "204" ]; then
-              # メンバーであれば、正規の大文字小文字(login)を取得
-              USER_JSON=$(curl -s \
-                -H "Authorization: Bearer $GH_TOKEN" \
-                https://api.github.com/users/$OWNER)
-              
-              CANONICAL_USER=$(echo "$USER_JSON" | jq -r .login)
-
-              if [ "$CANONICAL_USER" != "null" ] && [ -n "$CANONICAL_USER" ]; then
-                echo "    ✅ Found User: $CANONICAL_USER (Input: $OWNER)"
-                PREPARED_OWNERS="$PREPARED_OWNERS @$CANONICAL_USER"
-                continue
-              fi
-            fi
-            
-            # ---------------------------------------------------
-            # 2. チームチェック (/teams/{slug})
-            # ---------------------------------------------------
-            # チーム情報を取得して正規のSlugを確認
-            TEAM_JSON=$(curl -s \
-              -H "Authorization: Bearer $GH_TOKEN" \
-              https://api.github.com/orgs/$ORG_NAME/teams/$OWNER)
-            
-            # 成功時(200 OK)はJSONにslugが含まれる。失敗時はmessage等。
-            CANONICAL_SLUG=$(echo "$TEAM_JSON" | jq -r .slug)
-
-            if [ "$CANONICAL_SLUG" != "null" ] && [ -n "$CANONICAL_SLUG" ]; then
-              echo "    ✅ Found Team: $CANONICAL_SLUG (Input: $OWNER)"
-              PREPARED_OWNERS="$PREPARED_OWNERS @$ORG_NAME/$CANONICAL_SLUG"
-              continue
-            fi
-
-            # ---------------------------------------------------
-            # 3. エラー処理
-            # ---------------------------------------------------
-            # どちらもNGの場合
-            echo "❌ '$OWNER' は、組織($ORG_NAME)のメンバーでもチームでもありません。"
+          if [ "${{ github.event.inputs.repo_type }}" == "Study" ] && [ -z "${{ github.event.inputs.study_no }}" ]; then
+            echo "❌ StudyタイプのリポジトリではStudyNoは必須です"
             exit 1
-          done
-
-          echo "✅ Code Owner确认OK. Prepared string: $PREPARED_OWNERS"
-          # GITHUB_ENVに出力して後続のステップで利用可能にする
-          echo "VALIDATED_CODEOWNERS=$PREPARED_OWNERS" >> $GITHUB_ENV
+          fi
+          echo "✅ StudyNoチェックOK"
 
           # ---------------------------------------------------
-          # 3. リポジトリ名のルールチェック
+          # 3. リポジトリ名の組み立てと検証
           # ---------------------------------------------------
           # _repo_name_hintの説明に従い、入力パラメータからリポジトリ名を組み立てる
-          ENV_CODE="${{ github.event.inputs.env_code }}"
+          ENVIRONMENT="${{ github.event.inputs.environment }}"
           REPO_TYPE="${{ github.event.inputs.repo_type }}"
-          MOLECULE_NO="${{ github.event.inputs.molecule_no }}"
+          MOLECULE="${{ github.event.inputs.molecule }}"
           STUDY_NO="${{ github.event.inputs.study_no }}"
-          REPORTING_EVENT="${{ github.event.inputs.reporting_event }}"
-          ENVIRONMENT_NAME="${{ github.event.inputs.environment_name }}"
+          REPORTING_EVENT_NAME="${{ github.event.inputs.reporting_event_name }}"
 
-          if [ "$REPO_TYPE" == "S" ]; then
-            REPO_NAME="AEGIS-${ENV_CODE}-${REPO_TYPE}-${MOLECULE_NO}-${STUDY_NO}-${REPORTING_EVENT}-${ENVIRONMENT_NAME}"
+          # 第2部：環境
+          if [ "$ENVIRONMENT" == "DEV" ]; then
+            ENV_PART="ZDEV"
+          elif [ "$ENVIRONMENT" == "VAL" ]; then
+            ENV_PART="ZVAL"
           else
-            REPO_NAME="AEGIS-${ENV_CODE}-${REPO_TYPE}-${MOLECULE_NO}-${REPORTING_EVENT}-${ENVIRONMENT_NAME}"
+            ENV_PART="PRD"
+          fi
+
+          # 第3部：リポジトリタイプ
+          if [ "$REPO_TYPE" == "Study" ]; then
+            TYPE_PART="S"
+          else
+            TYPE_PART="M"
+          fi
+
+          # リポジトリ名を組み立てる
+          if [ "$REPO_TYPE" == "Study" ]; then
+            REPO_NAME="AEGIS-${ENV_PART}-${TYPE_PART}-${MOLECULE}-${STUDY_NO}-${REPORTING_EVENT_NAME}"
+          else
+            REPO_NAME="AEGIS-${ENV_PART}-${TYPE_PART}-${MOLECULE}-${REPORTING_EVENT_NAME}"
           fi
 
           echo "リポジトリ名を検証中: $REPO_NAME"
@@ -207,38 +143,13 @@ jobs:
             exit 1
           fi
 
-          # ルール 2：構成チェック（新仕様 S/M タイプ）
-          # 例:
-          #   Sタイプ: AEGIS-PRD-S-RO1234567-STD0001-ReportingEvent1-dev
-          #   Mタイプ: AEGIS-ZTEST-M-RO1234567-ReportingEvent2-dev
-          IFS='-' read -ra PARTS <<< "$REPO_NAME"
-          if [ ${#PARTS[@]} -lt 3 ]; then
-            echo "❌ リポジトリ名の形式が正しくありません（分割後の要素数不足）"
-            exit 1
-          fi
-          TYPE="${PARTS[2]}"
-          if [ "$TYPE" == "S" ]; then
-            if [ ${#PARTS[@]} -lt 7 ]; then
-              echo "❌ Sタイプのリポジトリ名の形式が正しくありません（要素数不足）"
-              exit 1
-            fi
-          elif [ "$TYPE" == "M" ]; then
-            if [ ${#PARTS[@]} -lt 6 ]; then
-              echo "❌ Mタイプのリポジトリ名の形式が正しくありません（要素数不足）"
-              exit 1
-            fi
-          else
-            echo "❌ リポジトリ名の第3部分はSまたはMである必要があります"
-            exit 1
-          fi
-
-          # ルール 3：長さ制限 (Githubの推奨に従う、最大100文字とする)
+          # ルール 2：長さ制限 (Githubの推奨に従う、最大100文字とする)
           if [ ${#REPO_NAME} -gt 100 ]; then
             echo "❌ リポジトリ名が長すぎます（>100）"
             exit 1
           fi
 
-          # ルール 4：既存在チェック
+          # ルール 3：既存在チェック
           STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
             -H "Authorization: Bearer $GH_TOKEN" \
             https://api.github.com/repos/${{ github.repository_owner }}/$REPO_NAME)
@@ -248,10 +159,10 @@ jobs:
             exit 1
           fi
 
-          echo "✅ 検証に合格しました"
+          echo "✅ リポジトリ名確認OK"
           echo "REPO_NAME=$REPO_NAME" >> $GITHUB_ENV
 
-      - name: テンプレートからリポジトリを作成
+      - name: Create repository from template
         run: |
           curl -X POST \
             -H "Authorization: Bearer $GH_TOKEN" \
@@ -265,10 +176,10 @@ jobs:
           }
           EOF
 
-      - name: リポジトリ作成完了待機 (Wait for creation)
+      - name: Wait for Repository Creation
         run: |
           TARGET_REPO="${{ github.repository_owner }}/${{ env.REPO_NAME }}"
-          echo "リポジトリの作成完了を待機中: $TARGET_REPO"
+          echo "Setting up rulesets for $TARGET_REPO"
 
           MAX_RETRIES=10
           SLEEP_SEC=5
@@ -293,7 +204,7 @@ jobs:
           echo "❌ タイムアウト: リポジトリの作成を確認できませんでした。"
           exit 1
 
-      - name: PRマージポリシーの設定 (Merge Commit のみ許可)
+      - name: Configure PR Merge Policy (Allow Merge Commits Only)
         run: |
           OWNER="${{ github.repository_owner }}"
           REPO_NAME="${{ env.REPO_NAME }}"
@@ -322,10 +233,19 @@ jobs:
             exit 1
           fi
 
-      - name: カスタムプロパティ (StudyNo) を設定
+      - name: Set Custom Properties (Molecule, StudyNo)
         run: |
-          # Custom Property 設定 (PATCH /repos/{owner}/{repo}/custom-properties/values)
-          # 注意: 事前にOrganization側で 'StudyNo' というプロパティが定義されている必要があります
+          # 変数を設定
+          MOLECULE_VALUE="${{ github.event.inputs.molecule_no }}"
+          STUDY_NO_VALUE="${{ github.event.inputs.study_no }}"
+
+          # repo_typeが'M'の場合、StudyNoを空文字列に設定
+          if [ "${{ github.event.inputs.repo_type }}" == "M" ]; then
+            STUDY_NO_VALUE=""
+          fi
+
+          # Custom Property 設定 (PATCH /orgs/{org}/properties/values)
+          # 注意: 事前にOrganization側で 'Molecule', 'StudyNo' というプロパティが定義されている必要があります
 
           # APIバージョンヘッダーを追加して curl を実行
           curl -L \
@@ -341,80 +261,124 @@ jobs:
             ],
             "properties": [
               {
+                "property_name": "Molecule",
+                "value": "$MOLECULE_VALUE"
+              },
+              {
                 "property_name": "StudyNo",
-                "value": "${{ github.event.inputs.study_no }}"
+                "value": "$STUDY_NO_VALUE"
               }
             ]
           }
           EOF
 
-      - name: TeamにWrite権限を付与
-        run: |
-          INPUT_TEAMS="${{ github.event.inputs.team_slug }}"
-          REPO_NAME="${{ env.REPO_NAME }}"
-          OWNER="${{ github.repository_owner }}"
+      - name: Grant Admin Permission to Admin Team
+        uses: actions/github-script@v7
+        env:
+          REPO_NAME: ${{ env.REPO_NAME }}
+        with:
+          github-token: ${{ env.GH_TOKEN }}
+          script: |
+            const owner = context.repo.owner;
+            const repo = process.env.REPO_NAME;
+            const environment = "${{ github.event.inputs.environment }}".toLowerCase();
+            const adminTeamSlug = `aegis-admin-${environment}`;
 
-          echo "Assigning Write permission to teams: $INPUT_TEAMS for repo: $REPO_NAME"
+            try {
+              core.info(`Checking for admin team: ${adminTeamSlug}`);
+              await github.rest.teams.getByName({
+                org: owner,
+                team_slug: adminTeamSlug,
+              });
+              core.info(`✅ Admin team '${adminTeamSlug}' found.`);
+            } catch (error) {
+              if (error.status === 404) {
+                core.setFailed(`❌ Admin team '${adminTeamSlug}' not found.`);
+              } else {
+                core.setFailed(`❌ Error checking for admin team '${adminTeamSlug}': ${error.message}`);
+              }
+              return;
+            }
 
-          # カンマで分割してループ
-          CLEAN_TEAMS=$(echo "$INPUT_TEAMS" | tr ',' ' ' | xargs)
+            try {
+              core.info(`Granting 'admin' permission to team: ${adminTeamSlug}`);
+              await github.rest.teams.addOrUpdateRepoPermissionsInOrg({
+                org: owner,
+                team_slug: adminTeamSlug,
+                owner: owner,
+                repo: repo,
+                permission: 'admin',
+              });
+              core.info(`✅ Successfully granted 'admin' permission to team '${adminTeamSlug}'.`);
+            } catch (error) {
+              core.setFailed(`❌ Failed to grant 'admin' permission to team '${adminTeamSlug}': ${error.message}`);
+            }
 
-          for TEAM_SLUG in $CLEAN_TEAMS; do
-            echo "Processing team: $TEAM_SLUG"
+      - name: Grant Write Permission to Project Teams
+        uses: actions/github-script@v7
+        env:
+          REPO_NAME: ${{ env.REPO_NAME }}
+        with:
+          github-token: ${{ env.GH_TOKEN }}
+          script: |
+            const owner = context.repo.owner;
+            const repo = process.env.REPO_NAME;
+            const repoType = "${{ github.event.inputs.repo_type }}";
+            const environment = "${{ github.event.inputs.environment }}".toLowerCase();
+            const studyNo = "${{ github.event.inputs.study_no }}".toLowerCase();
+            const molecule = "${{ github.event.inputs.molecule }}".toLowerCase();
 
-            # チームに push (Write) 権限を付与
-            # PUT /orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-              -X PUT \
-              -H "Authorization: Bearer $GH_TOKEN" \
-              -H "Accept: application/vnd.github+json" \
-              -d '{"permission":"push"}' \
-              "https://api.github.com/orgs/$OWNER/teams/$TEAM_SLUG/repos/$OWNER/$REPO_NAME")
+            let identifier = "";
+            if (repoType === "Study") {
+              identifier = studyNo;
+            } else {
+              identifier = molecule;
+            }
+            const searchPattern = `-${identifier}-${environment}`;
+            core.info(`Searching for teams with pattern: '${searchPattern}' to grant 'write' permission.`);
 
-            if [ "$STATUS" == "204" ]; then
-              echo "✅ Team '$TEAM_SLUG' added with Write access."
-            else
-              echo "❌ Failed to add team '$TEAM_SLUG'. Status code: $STATUS"
-              echo "   Check if team slug is correct and app has permissions."
-              exit 1
-            fi
-          done
+            const matchedTeams = [];
+            try {
+              for await (const response of github.paginate.iterator(github.rest.teams.list, {
+                org: owner,
+                per_page: 100,
+              })) {
+                const teamsOnPage = response.data;
+                const matchedOnPage = teamsOnPage.filter(team => team.slug.toLowerCase().includes(searchPattern));
+                if (matchedOnPage.length > 0) {
+                  matchedTeams.push(...matchedOnPage);
+                }
+              }
+            } catch (error) {
+              core.setFailed(`❌ Failed to retrieve teams: ${error.message}`);
+              return;
+            }
 
-      - name: CODEOWNERS作成とPush (Actions有効化)
-        run: |
-          REPO_NAME="${{ env.REPO_NAME }}"
-          # 検証ステップで作成・整形済みの変数を使用
-          FORMATTED_OWNERS="${{ env.VALIDATED_CODEOWNERS }}"
+            if (matchedTeams.length === 0) {
+              core.setFailed(`❌ No teams found matching the pattern '${searchPattern}'. Please check team naming conventions.`);
+              return;
+            }
 
-          echo "CODEOWNERSファイルを生成してPushします (Actionsのアクティベーションも兼ねる)"
-          echo "Using owners: $FORMATTED_OWNERS"
+            core.info(`Found matching teams: ${matchedTeams.map(t => t.slug).join(', ')}`);
 
-          # 作業用ディレクトリ
-          WORK_DIR="temp_work_$REPO_NAME"
-          mkdir -p $WORK_DIR
-          cd $WORK_DIR
+            for (const team of matchedTeams) {
+              try {
+                core.info(`Granting 'write' permission to team: ${team.slug}`);
+                await github.rest.teams.addOrUpdateRepoPermissionsInOrg({
+                  org: owner,
+                  team_slug: team.slug,
+                  owner: owner,
+                  repo: repo,
+                  permission: 'push', // 'push' corresponds to 'write' permission
+                });
+                core.info(`✅ Successfully granted 'write' permission to team '${team.slug}'.`);
+              } catch (error) {
+                core.setFailed(`❌ Failed to grant 'write' permission to team '${team.slug}': ${error.message}`);
+                // The loop will stop here because setFailed terminates the action
+              }
+            }
 
-          # 新リポジトリをclone (GH_TOKEN使用)
-          git clone --depth 1 "https://x-access-token:$GH_TOKEN@github.com/${{ github.repository_owner }}/$REPO_NAME.git" .
-
-          echo "# This file is automatically generated by Repo Factory" > .github/CODEOWNERS
-          echo "*" $FORMATTED_OWNERS >> .github/CODEOWNERS
-
-          # Commit & Push
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          git add .github/CODEOWNERS
-          git commit -m "chore: setup CODEOWNERS and activate actions"
-          git push origin main
-
-          echo "✅ CODEOWNERSのPush完了。Actionsがアクティブ化されました。"
-
-          # 後始末
-          cd ..
-          rm -rf $WORK_DIR
-
-      - name: 分支作成 (dev/qa)
+      - name: Create Additional Branches
         run: |
           # ---------------------------------------------------
           # 分支作成: dev, qa... (基于main)
@@ -449,11 +413,9 @@ jobs:
           cd ..
           rm -rf $WORK_DIR
 
-      - name: Rulesetの設定 (Import from file)
+      - name: Configure Rulesets from File
         run: |
           TARGET_REPO="${{ github.repository_owner }}/${{ env.REPO_NAME }}"
-          TEAM_MODE="${{ github.event.inputs.team_mode }}"
-          echo "Setting up rulesets for $TARGET_REPO (Mode: $TEAM_MODE)"
 
           # ルールセット定義ファイルのディレクトリ
           FACTORY_REPO="${{ github.repository }}" 
@@ -498,23 +460,6 @@ jobs:
             # 現在の定義ファイルにはURL等が含まれていないため許容する。
             sed 's|//.*||g' temp_ruleset.json > clean_ruleset.json
 
-            # ---------------------------------------------------
-            # モードに応じたJSONの動的書き換え
-            # ---------------------------------------------------
-            if [ "$TEAM_MODE" == "Single" ]; then
-              echo "ℹ️ Single Mode detected: Disabling required approvals for $BRANCH ruleset."
-              
-              # jq を使って値を書き換える
-              # required_approving_review_count -> 0
-              # require_code_owner_review -> false
-              
-              jq '(.rules[] | select(.type == "pull_request") | .parameters.required_approving_review_count) = 0 | 
-                  (.rules[] | select(.type == "pull_request") | .parameters.require_code_owner_review) = false' \
-                  clean_ruleset.json > modified_ruleset.json
-                  
-              mv modified_ruleset.json clean_ruleset.json
-            fi
-
             echo "Creating ruleset for branch: $BRANCH..."
             
             # 作成実行 (レスポンスボディも取得してエラー詳細を表示)
@@ -543,22 +488,18 @@ jobs:
             fi
           done
 
-      - name: Setup Labels (Release)
+      - name: Setup Labels (AEGIS)
         run: |
           REPO_NAME="${{ env.REPO_NAME }}"
-          echo "Setting up release labels for $REPO_NAME..."
+          echo "Setting up AEGIS labels for $REPO_NAME..."
 
           # Define Labels
-          # release:major (Red) - Significant update
-          # release:minor (Orange) - Feature update
-          # release:patch (Green) - Fix/Small update
-          # no-release (Gray) - Use when no release is needed
+          # AEGIS: release (Red)
+          # AEGIS: no-release (Gray) - Use when no release is needed
 
           LABELS_JSON='[
-            {"name": "release:major", "color": "b60205", "description": "Increments major version"},
-            {"name": "release:minor", "color": "d93f0b", "description": "Increments minor version"},
-            {"name": "release:patch", "color": "0e8a16", "description": "Increments patch version"},
-            {"name": "no-release", "color": "6f7f88", "description": "Prevents release"}
+            {"name": "AEGIS: release", "color": "b60205", "description": "Release"},
+            {"name": "AEGIS: no-release", "color": "6f7f88", "description": "No Release"}
           ]'
 
           echo "$LABELS_JSON" | jq -c '.[]' | while read -r LABEL_DATA; do
