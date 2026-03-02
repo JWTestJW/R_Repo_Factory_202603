@@ -73,6 +73,7 @@ jobs:
           # ---------------------------------------------------
           # メインブランチ以外に作成するブランチ（スペース区切り）
           echo "OTHER_BRANCHES=dev qa" >> $GITHUB_ENV
+          echo "✅ Configured additional branches to create: ${OTHER_BRANCHES}"
 
       - name: Validate parameters and construct repository name
         id: validate
@@ -437,7 +438,7 @@ jobs:
               -H "Accept: application/vnd.github+json" $CONTENT_URL)
             
             if [ "$FILE_STATUS" != "200" ]; then
-              echo "🔵 No ruleset file found for '$BRANCH' (Status: $FILE_STATUS). Skipping."
+              echo "✅ No ruleset file found for '$BRANCH' (Status: $FILE_STATUS). Skipping."
               continue
             fi
 
