@@ -508,8 +508,8 @@ jobs:
           # AEGIS: no-release (Gray) - Use when no release is needed
 
           LABELS_JSON='[
-            {"name": "AEGIS: release", "color": "b60205", "description": "Release"},
-            {"name": "AEGIS: no-release", "color": "6f7f88", "description": "No Release"}
+            {"name": "AEGIS: release", "color": "b60205", "description": "This PR requires a release"},
+            {"name": "AEGIS: no-release", "color": "cfd3d7", "description": "This PR does not require a release"}
           ]'
 
           echo "$LABELS_JSON" | jq -c '.[]' | while read -r LABEL_DATA; do
