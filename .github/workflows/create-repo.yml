@@ -89,7 +89,7 @@ jobs:
             https://api.github.com/repos/${{ github.repository_owner }}/$TEMPLATE_NAME)
 
           if [ "$STATUS_TPL" != "200" ]; then
-            echo "❌ Template repository ($TEMPLATE_NAME) not found."
+            echo "❌ Failed to validate template repository.Template repository ($TEMPLATE_NAME) not found or Access denied. Status: $STATUS_TPL"
             exit 1
           fi
           echo "✅ Template validation OK."
