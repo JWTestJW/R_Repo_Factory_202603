@@ -177,7 +177,7 @@ jobs:
           BODY=$(echo "$HTTP_RESPONSE" | sed '$d')
 
           if [ "$HTTP_CODE" = "201" ]; then
-            echo "✅ Repository created successfully as private."
+            echo "✅ Repository created successfully."
           else
             echo "❌ Failed to create repository. Status: $HTTP_CODE"
             echo "Body: $BODY"
@@ -196,7 +196,7 @@ jobs:
             echo "Attempt $i/$MAX_RETRIES: Checking repo and main branch existence..."
             
             # リポジトリのmainブランチ情報を取得して存在確認 (200 OK なら作成完了とみなす)
-            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \              
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
               -H "Authorization: Bearer $GH_TOKEN" \
               -H "X-GitHub-Api-Version: 2022-11-28" \
               https://api.github.com/repos/$TARGET_REPO/branches/main)
