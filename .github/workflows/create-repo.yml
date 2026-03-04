@@ -90,11 +90,13 @@ jobs:
           # ---------------------------------------------------
           # 2. StudyNoの必須チェック
           # ---------------------------------------------------
-          if [ "${{ github.event.inputs.repo_type }}" == "Study" ] && [ -z "${{ github.event.inputs.study_no }}" ]; then
-            echo "❌ StudyNo is required for Study type repositories."
-            exit 1
+          if [ "${{ github.event.inputs.repo_type }}" == "Study" ]; then
+            if [ -z "${{ github.event.inputs.study_no }}" ]; then
+              echo "❌ StudyNo is required for Study type repositories."
+              exit 1
+            fi
+            echo "✅ StudyNo check OK."
           fi
-          echo "✅ StudyNo check OK."
 
           # ---------------------------------------------------
           # 3. リポジトリ名の組み立てと検証
