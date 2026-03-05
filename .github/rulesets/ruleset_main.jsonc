@@ -85,11 +85,10 @@
 
         // 必須とするステータスチェックのリスト
         // context: Workflow の jobs.<job_id>.name。name が明示的に書かれていない場合は job_id。
-        // app_id: 15368 を指定すると、チェック元が GitHub Actions に限定されます。
         "required_status_checks": [
-          { "context": "Check PR Direction", "app_id": 15368 }, // PR の方向けチェック
-          { "context": "Check Release Label", "app_id": 15368 }, // ラベル選択内容チェック
-          { "context": "Check renv.lock", "app_id": 15368 } // renv.lock の整合性チェック
+          { "context": "actions/check-pr-direction" }, // PR の方向けチェック
+          { "context": "actions/check-release-label" }, // ラベル選択内容チェック
+          { "context": "actions/check-renv-lock" } // renv.lock の整合性チェック
         ]
       }
     }
