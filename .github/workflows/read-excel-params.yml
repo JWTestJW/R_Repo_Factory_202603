@@ -1,0 +1,64 @@
+name: Read Excel Parameters
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch: {}
+
+env:
+  EXCEL_FILE_NAME: "NewRepoInfo.xlsx"
+  SHEET_NAME: "Prameters"
+
+jobs:
+  read-and-validate:
+    runs-on: ubuntu-latest
+    outputs:
+      has_errors: ${{ steps.process.outputs.has_errors }}
+      json_output: ${{ steps.process.outputs.json_output }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install openpyxl
+
+      - name: Process Excel file
+        id: process
+        run: |
+          python .github/scripts/read_excel_params.py
+        env:
+          EXCEL_FILE: ${{ env.EXCEL_FILE_NAME }}
+          SHEET_NAME: ${{ env.SHEET_NAME }}
+
+  display-results:
+    runs-on: ubuntu-latest
+    needs: read-and-validate
+    if: needs.read-and-validate.outputs.has_errors == 'false'
+    steps:
+      - name: Display parsed rows
+        env:
+          JSON_OUTPUT: ${{ needs.read-and-validate.outputs.json_output }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import sys
+
+          raw = os.getenv("JSON_OUTPUT", "")
+          if not raw:
+              print("json_output is empty.")
+              sys.exit(0)
+
+          data = json.loads(raw)
+          for index, row in enumerate(data, start=1):
+              parts = [f"{key}={value}" for key, value in row.items()]
+              print(f"第{index}回：" + ", ".join(parts))
+          PY
