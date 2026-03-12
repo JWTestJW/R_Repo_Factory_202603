@@ -28,11 +28,15 @@ jobs:
 
       - name: Install dependencies
         run: |
+          # 厳格モード: エラー時は即終了
+          set -euo pipefail
           pip install openpyxl
 
       - name: Process Excel file
         id: process
         run: |
+          # 厳格モード: エラー時は即終了
+          set -euo pipefail
           python .github/scripts/read_excel_params.py
         env:
           EXCEL_FILE: ${{ env.EXCEL_FILE_NAME }}
@@ -47,6 +51,8 @@ jobs:
         env:
           JSON_OUTPUT: ${{ needs.read-and-validate.outputs.json_output }}
         run: |
+          # 厳格モード: エラー時は即終了
+          set -euo pipefail
           python - <<'PY'
           import json
           import os
@@ -60,5 +66,5 @@ jobs:
           data = json.loads(raw)
           for index, row in enumerate(data, start=1):
               parts = [f"{key}={value}" for key, value in row.items()]
-              print(f"第{index}回：" + ", ".join(parts))
+              print(f"Row {index}: " + ", ".join(parts))
           PY
