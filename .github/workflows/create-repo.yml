@@ -59,7 +59,7 @@ jobs:
     steps:
       - name: Generate App Token
         id: app-token
-        uses: actions/create-github-app-token@v3.0.0-beta.1
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.CREATE_REPO_APP_ID }}
           private-key: ${{ secrets.CREATE_REPO_APP_PRIVATE_KEY }}
@@ -82,7 +82,7 @@ jobs:
 
           STATUS_TPL=$(curl -s -o /dev/null -w "%{http_code}" \
             -H "Authorization: Bearer $GH_TOKEN" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
             https://api.github.com/repos/${{ github.repository_owner }}/$TEMPLATE_NAME)
 
           if [ "$STATUS_TPL" == "404" ]; then
@@ -146,7 +146,7 @@ jobs:
           # ルール 3：既存在チェック
           STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
             -H "Authorization: Bearer $GH_TOKEN" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
             https://api.github.com/repos/${{ github.repository_owner }}/$REPO_NAME)
 
           if [ "$STATUS" == "200" ]; then
@@ -171,7 +171,7 @@ jobs:
             -X POST \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
             "https://api.github.com/repos/${{ github.repository_owner }}/${{ github.event.inputs.template_name }}/generate" \
             -d '{
               "name": "${{ env.REPO_NAME }}",
@@ -208,7 +208,7 @@ jobs:
             # リポジトリのデフォルトブランチ情報を取得して存在確認 (200 OK なら作成完了とみなす)
             HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
               -H "Authorization: Bearer $GH_TOKEN" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
               https://api.github.com/repos/$TARGET_REPO/branches/$DEFAULT_BRANCH)
             
             if [ "$HTTP_CODE" == "200" ]; then
@@ -236,7 +236,7 @@ jobs:
             -X PATCH \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
             "https://api.github.com/repos/$OWNER/$REPO_NAME" \
             -d '{
               "allow_merge_commit": true,
@@ -287,7 +287,7 @@ jobs:
             -X PATCH \
             -H "Accept: application/vnd.github+json" \
             -H "Authorization: Bearer $GH_TOKEN" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
             "https://api.github.com/orgs/${{ github.repository_owner }}/properties/values" \
             -d "$JSON_PAYLOAD")
 
@@ -320,6 +320,9 @@ jobs:
               await github.rest.teams.getByName({
                 org: owner,
                 team_slug: adminTeamSlug,
+                headers: {
+                  "X-GitHub-Api-Version": "2026-03-10"
+                }
               });
               core.info(`✅ Admin team '${adminTeamSlug}' found.`);
             } catch (error) {
@@ -339,6 +342,9 @@ jobs:
                 owner: owner,
                 repo: repo,
                 permission: 'admin',
+                headers: {
+                  "X-GitHub-Api-Version": "2026-03-10"
+                }
               });
               core.info(`✅ Successfully granted 'admin' permission to team '${adminTeamSlug}'.`);
             } catch (error) {
@@ -370,6 +376,9 @@ jobs:
               await github.rest.teams.getByName({
                 org: owner,
                 team_slug: projectTeamSlug,
+                headers: {
+                  "X-GitHub-Api-Version": "2026-03-10"
+                }
               });
               core.info(`✅ Project team '${projectTeamSlug}' found.`);
             } catch (error) {
@@ -389,6 +398,9 @@ jobs:
                 owner: owner,
                 repo: repo,
                 permission: 'push', // 'push' corresponds to 'write' permission
+                headers: {
+                  "X-GitHub-Api-Version": "2026-03-10"
+                }
               });
               core.info(`✅ Successfully granted 'write' permission to team '${projectTeamSlug}'.`);
             } catch (error) {
@@ -460,7 +472,7 @@ jobs:
             # 存在確認
             FILE_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
               -H "Authorization: Bearer $GH_TOKEN" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
               -H "Accept: application/vnd.github+json" $CONTENT_URL)
             
             if [ "$FILE_STATUS" == "404" ]; then
@@ -476,7 +488,7 @@ jobs:
             # ダウンロード
             DOWNLOAD_RESP=$(curl -s \
               -H "Authorization: Bearer $GH_TOKEN" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
               -H "Accept: application/vnd.github+json" $CONTENT_URL)
               
             if ! echo "$DOWNLOAD_RESP" | grep -q '"content":'; then
@@ -499,7 +511,7 @@ jobs:
               -X POST \
               -H "Authorization: Bearer $GH_TOKEN" \
               -H "Accept: application/vnd.github+json" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
               "https://api.github.com/repos/$TARGET_REPO/rulesets" \
               -d @clean_ruleset.json)
 
@@ -538,11 +550,14 @@ jobs:
               core.info(`Creating label: ${label.name}`);
               try {
                 await github.rest.issues.createLabel({
-                  owner,
-                  repo,
+                  owner: owner,
+                  repo: repo,
                   name: label.name,
                   color: label.color,
-                  description: label.description
+                  description: label.description,
+                  headers: {
+                    "X-GitHub-Api-Version": "2026-03-10"
+                  }
                 });
                 core.info(`✅ Created '${label.name}'`);
               } catch (error) {
