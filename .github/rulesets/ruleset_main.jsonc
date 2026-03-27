@@ -92,7 +92,7 @@
       }
     }
 
-    // -- 以下はUIで設定可能なその他のルール (Enterprise/Pro向けまたは高度な機能) --
+    // --- 以下はUIで設定可能なその他のルール (Enterprise/Pro向けまたは高度な機能) ---
 
     // [Enterprise/Public] コミット署名の必須化 (Required signatures)
     // コミットが検証済みの署名を持つことを要求します
