@@ -539,9 +539,7 @@ jobs:
             # reviewer_requirement に応じて required_approving_review_count を設定
             REVIEWER_REQ="${{ github.event.inputs.reviewer_requirement }}"
             if [ "$REVIEWER_REQ" == "required" ]; then
-              jq '.required_approving_review_count = 1' clean_ruleset.json > temp_clean.json && mv temp_clean.json clean_ruleset.json
-            elif [ "$REVIEWER_REQ" == "optional" ]; then
-              jq '.required_approving_review_count = 0' clean_ruleset.json > temp_clean.json && mv temp_clean.json clean_ruleset.json
+              jq '(.rules[] | select(.type == "pull_request") | .parameters.required_approving_review_count) = 1' clean_ruleset.json > temp_clean.json && mv temp_clean.json clean_ruleset.json
             fi
 
             echo "Creating ruleset for branch: $BRANCH..."
