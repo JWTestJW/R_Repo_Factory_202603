@@ -69,6 +69,14 @@ on:
         description: "Freely configurable, must correspond to a folder name"
         required: true
         default: "ReportingEvent1"
+      reviewer_requirement:
+        description: "Reviewer requirement: optional or required"
+        required: true
+        type: choice
+        options:
+          - optional
+          - required
+        default: optional
 
 env:
   DEFAULT_BRANCH: "main"
@@ -527,6 +535,14 @@ jobs:
             # 現在の定義ファイルにはURL等が含まれていないため許容する。
             sed 's|//.*||g' temp_ruleset.json > clean_ruleset.json
 
+            # reviewer_requirement に応じて required_approving_review_count を設定
+            REVIEWER_REQ="${{ github.event.inputs.reviewer_requirement }}"
+            if [ "$REVIEWER_REQ" == "required" ]; then
+              jq '.required_approving_review_count = 1' clean_ruleset.json > temp_clean.json && mv temp_clean.json clean_ruleset.json
+            elif [ "$REVIEWER_REQ" == "optional" ]; then
+              jq '.required_approving_review_count = 0' clean_ruleset.json > temp_clean.json && mv temp_clean.json clean_ruleset.json
+            fi
+
             echo "Creating ruleset for branch: $BRANCH..."
             
             # 作成実行 (レスポンスボディも取得してエラー詳細を表示)
@@ -566,7 +582,9 @@ jobs:
 
             const labels = [
               {name: "AEGIS: release", color: "b60205", description: "This PR requires a release"},
-              {name: "AEGIS: no-release", color: "cfd3d7", description: "This PR does not require a release"}
+              {name: "AEGIS: no-release", color: "cfd3d7", description: "This PR does not require a release"},
+              {name: "AEGIS_ISSUE: bug", color: "d73a49", description: "This issue is a bug"},
+              {name: "AEGIS_ISSUE: enhancement", color: "28a745", description: "This issue is about missing or incomplete feature"}
             ];
 
             for (const label of labels) {
