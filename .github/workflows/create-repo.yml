@@ -89,6 +89,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Show inputs
+        run: |
+          echo '${{ toJSON(github.event.inputs) }}'
+
       - name: Generate App Token
         id: app-token
         uses: actions/create-github-app-token@v3
