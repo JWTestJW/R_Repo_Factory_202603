@@ -86,7 +86,7 @@
         // 必須とするステータスチェックのリスト
         // context: Workflow の jobs.<job_id>.name。name が明示的に書かれていない場合は job_id。
         "required_status_checks": [
-          { "context": "actions/check-pr-direction" }, // PR の方向けチェック
+          { "context": "actions/check-pr-direction-to-qa" }, // PR の方向けチェック
           { "context": "actions/check-renv-lock" } // renv.lock の整合性チェック
         ]
       }
