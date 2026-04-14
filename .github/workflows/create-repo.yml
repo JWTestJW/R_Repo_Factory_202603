@@ -586,8 +586,20 @@ jobs:
             const labels = [
               {name: "AEGIS: release", color: "b60205", description: "This PR requires a release"},
               {name: "AEGIS: no-release", color: "cfd3d7", description: "This PR does not require a release"},
-              {name: "AEGIS_ISSUE: bug", color: "d73a49", description: "This issue is a bug"},
-              {name: "AEGIS_ISSUE: enhancement", color: "28a745", description: "This issue is about missing or incomplete feature"}
+              {name: "Risk: Low", color: "e88888", description: ""},
+              {name: "Risk: High", color: "e88888", description: ""},
+              {name: "Product: SDTMv", color: "7bc88a", description: ""},
+              {name: "Product: ADaM", color: "7bc88a", description: ""},
+              {name: "Product: TLG", color: "7bc88a", description: ""},
+              {name: "QC-Method: DP", color: "7ba8d9", description: ""},
+              {name: "QC-Method: CR", color: "7ba8d9", description: ""},
+              {name: "QC-Method: IDD", color: "7ba8d9", description: ""},
+              {name: "QC-Method: FL", color: "7ba8d9", description: ""},
+              {name: "Status: In Progress", color: "f2d574", description: ""},
+              {name: "Status: Ready for QC", color: "f2d574", description: ""},
+              {name: "Status: QC In Progress", color: "f2d574", description: ""},
+              {name: "Status: QC Complete", color: "f2d574", description: ""},
+              {name: "Status: Not required", color: "f2d574", description: ""}
             ];
 
             for (const label of labels) {
