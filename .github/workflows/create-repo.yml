@@ -302,6 +302,7 @@ jobs:
               core.setFailed(`❌ Failed to list runner groups: [${error.status}] ${error.message}`);
               return;
             }
+            core.info(`Runner allGroups fetched: ${allGroups.length}`);
             const groups = allGroups.filter(g => g && g.name);
             core.info(`Runner groups fetched: ${groups.length}`);
             const group = groups.find(g => g.name === runnerGroupName);
