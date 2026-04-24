@@ -97,7 +97,7 @@ jobs:
         id: app-token
         uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ secrets.CREATE_REPO_APP_ID }}
+          client-id: ${{ secrets.CREATE_REPO_CLIENT_ID }}
           private-key: ${{ secrets.CREATE_REPO_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
 
@@ -258,6 +258,69 @@ jobs:
 
           echo "❌ Timeout: Repository creation could not be confirmed."
           exit 1
+
+      - name: Add Repository to Runner Group
+        uses: actions/github-script@v8
+        env:
+          REPO_NAME: ${{ env.REPO_NAME }}
+        with:
+          github-token: ${{ env.GH_TOKEN }}
+          script: |
+            const owner = context.repo.owner;
+            const repo = process.env.REPO_NAME;
+            const environment = "${{ github.event.inputs.environment }}";
+
+            // 1. environment → RunnerGroup名のマッピング
+            const groupNameMap = { DEV: "AEGIS-DEV", VAL: "AEGIS-VAL", PRD: "AEGIS" };
+            const runnerGroupName = groupNameMap[environment];
+            if (!runnerGroupName) {
+              core.setFailed(`❌ Unknown environment: ${environment}`);
+              return;
+            }
+            core.info(`Target Runner Group: ${runnerGroupName}`);
+
+            // 2. ページネーション対応でRunnerGroupのIDを検索
+            let allGroups;
+            try {
+              allGroups = await github.paginate(
+                github.rest.actions.listSelfHostedRunnerGroupsForOrg,
+                { org: owner, per_page: 100 }
+              );
+            } catch (error) {
+              core.setFailed(`❌ Failed to list runner groups: [${error.status}] ${error.message}`);
+              return;
+            }
+            const group = allGroups.find(g => g.name === runnerGroupName);
+            if (!group) {
+              core.setFailed(`❌ Runner Group '${runnerGroupName}' not found in organization '${owner}'.`);
+              return;
+            }
+            core.info(`✅ Runner Group '${runnerGroupName}' found. ID: ${group.id}`);
+
+            // 3. リポジトリのIDを取得
+            let repoData;
+            try {
+              const response = await github.rest.repos.get({ owner, repo });
+              repoData = response.data;
+            } catch (error) {
+              core.setFailed(`❌ Failed to get repository info for '${repo}': [${error.status}] ${error.message}`);
+              return;
+            }
+            core.info(`✅ Repository '${repo}' found. ID: ${repoData.id}`);
+
+            // 4. リポジトリをRunnerGroupのRepositoryAccessに追加
+            core.info(`Adding repository '${repo}' to Runner Group '${runnerGroupName}'...`);
+            try {
+              await github.rest.actions.addRepoAccessToSelfHostedRunnerGroupInOrg({
+                org: owner,
+                runner_group_id: group.id,
+                repository_id: repoData.id,
+                headers: { "X-GitHub-Api-Version": "2026-03-10" }
+              });
+              core.info(`✅ Repository '${repo}' successfully added to Runner Group '${runnerGroupName}'.`);
+            } catch (error) {
+              core.setFailed(`❌ Failed to add repository to Runner Group '${runnerGroupName}': [${error.status}] ${error.message}`);
+            }
 
       - name: Configure PR Merge Policy (Allow Merge Commits Only)
         run: |
@@ -576,11 +639,13 @@ jobs:
 
       - name: Setup Labels (AEGIS)
         uses: actions/github-script@v8
+        env:
+          REPO_NAME: ${{ env.REPO_NAME }}
         with:
           github-token: ${{ env.GH_TOKEN }}
           script: |
             const owner = context.repo.owner;
-            const repo = "${{ env.REPO_NAME }}";
+            const repo = process.env.REPO_NAME;
             core.info(`Setting up AEGIS labels for ${owner}/${repo}...`);
 
             const labels = [
