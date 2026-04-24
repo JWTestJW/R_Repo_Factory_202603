@@ -284,14 +284,24 @@ jobs:
             try {
               allGroups = await github.paginate(
                 github.rest.actions.listSelfHostedRunnerGroupsForOrg,
-                { org: owner, per_page: 100 }
+                {
+                  org: owner,
+                  per_page: 100,
+                  headers: {
+                    "X-GitHub-Api-Version": "2026-03-10"
+                  }
+                },
+                (response) => response.data.runner_groups
               );
             } catch (error) {
               core.setFailed(`❌ Failed to list runner groups: [${error.status}] ${error.message}`);
               return;
             }
+            core.info(`Runner groups fetched: ${allGroups.length}`);
             const group = allGroups.find(g => g.name === runnerGroupName);
             if (!group) {
+              const availableGroupNames = allGroups.map(g => g.name).join(", ");
+              core.info(`Available runner groups: ${availableGroupNames || "(none)"}`);
               core.setFailed(`❌ Runner Group '${runnerGroupName}' not found in organization '${owner}'.`);
               return;
             }
@@ -300,7 +310,13 @@ jobs:
             // 3. リポジトリのIDを取得
             let repoData;
             try {
-              const response = await github.rest.repos.get({ owner, repo });
+              const response = await github.rest.repos.get({
+                owner: owner,
+                repo: repo,
+                headers: {
+                  "X-GitHub-Api-Version": "2026-03-10"
+                }
+              });
               repoData = response.data;
             } catch (error) {
               core.setFailed(`❌ Failed to get repository info for '${repo}': [${error.status}] ${error.message}`);
@@ -315,7 +331,9 @@ jobs:
                 org: owner,
                 runner_group_id: group.id,
                 repository_id: repoData.id,
-                headers: { "X-GitHub-Api-Version": "2026-03-10" }
+                headers: { 
+                  "X-GitHub-Api-Version": "2026-03-10" 
+                }
               });
               core.info(`✅ Repository '${repo}' successfully added to Runner Group '${runnerGroupName}'.`);
             } catch (error) {
