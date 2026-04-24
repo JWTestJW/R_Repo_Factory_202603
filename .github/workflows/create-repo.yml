@@ -291,16 +291,22 @@ jobs:
                     "X-GitHub-Api-Version": "2026-03-10"
                   }
                 },
-                (response) => response.data.runner_groups
+                (response) => {
+                  if (Array.isArray(response.data)) {
+                    return response.data;
+                  }
+                  return response.data?.runner_groups ?? [];
+                }
               );
             } catch (error) {
               core.setFailed(`❌ Failed to list runner groups: [${error.status}] ${error.message}`);
               return;
             }
-            core.info(`Runner groups fetched: ${allGroups.length}`);
-            const group = allGroups.find(g => g.name === runnerGroupName);
+            const groups = allGroups.filter(g => g && g.name);
+            core.info(`Runner groups fetched: ${groups.length}`);
+            const group = groups.find(g => g.name === runnerGroupName);
             if (!group) {
-              const availableGroupNames = allGroups.map(g => g.name).join(", ");
+              const availableGroupNames = groups.map(g => g.name).join(", ");
               core.info(`Available runner groups: ${availableGroupNames || "(none)"}`);
               core.setFailed(`❌ Runner Group '${runnerGroupName}' not found in organization '${owner}'.`);
               return;
