@@ -342,7 +342,7 @@ jobs:
             // 4. リポジトリをRunnerGroupのRepositoryAccessに追加
             core.info(`Adding repository '${repo}' to Runner Group '${runnerGroupName}'...`);
             try {
-              await github.rest.actions.addRepoAccessToSelfHostedRunnerGroupInOrg({
+              await github.request("POST /orgs/{org}/actions/runner-groups/{runner_group_id}/repositories", {
                 org: owner,
                 runner_group_id: group.id,
                 repository_id: repoData.id,
