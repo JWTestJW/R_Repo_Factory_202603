@@ -259,171 +259,101 @@ jobs:
           echo "❌ Timeout: Repository creation could not be confirmed."
           exit 1
 
-      - name: Debug List Runner Groups via curl
-        run: |
-          # 厳格モード: エラー時は即終了
-          set -euo pipefail
-          trap 'echo "❌ Error in Debug List Runner Groups via curl step (line $LINENO). Check operations above."' ERR
+      - name: Add Repository to Runner Group
+        uses: actions/github-script@v8
+        env:
+          REPO_NAME: ${{ env.REPO_NAME }}
+        with:
+          github-token: ${{ env.GH_TOKEN }}
+          script: |
+            const owner = context.repo.owner;
+            const repo = process.env.REPO_NAME;
+            const environment = "${{ github.event.inputs.environment }}".toLowerCase();
 
-          ORG="${{ github.repository_owner }}"
-          PAGE=1
-          PER_PAGE=100
-          TOTAL=0
+            // 1. environment → RunnerGroup名のマッピング
+            const groupNameMap = { dev: "AEGIS-RunnerGroup-DEV", val: "AEGIS-RunnerGroup-VAL", prd: "AEGIS-RunnerGroup" };
+            const runnerGroupName = groupNameMap[environment];
+            if (!runnerGroupName) {
+              core.setFailed(`❌ Unknown environment: ${environment}`);
+              return;
+            }
+            core.info(`Target Runner Group: ${runnerGroupName}`);
 
-          echo "Listing self-hosted runner groups for organization: $ORG"
+            // 2. Manual pagination to list runner groups (aligned with curl implementation)
+            let allGroups = [];
+            let page = 1;
+            const perPage = 100;
+            try {
+              while (true) {
+                const response = await github.request("GET /orgs/{org}/actions/runner-groups", {
+                  org: owner,
+                  per_page: perPage,
+                  page: page,
+                  headers: {
+                    "X-GitHub-Api-Version": "2026-03-10"
+                  }
+                });
+                
+                if (!response.data || !response.data.runner_groups) {
+                  core.setFailed(`❌ Unexpected response structure from runner groups API`);
+                  return;
+                }
+                
+                const pageGroups = response.data.runner_groups;
+                allGroups = allGroups.concat(pageGroups);
+                
+                if (pageGroups.length < perPage) {
+                  break;
+                }
+                page++;
+              }
+            } catch (error) {
+              core.setFailed(`❌ Failed to list runner groups: [${error.status}] ${error.message}`);
+              return;
+            }
 
-          while true; do
-            echo "Fetching runner groups page $PAGE..."
+            core.info(`✅ Runner groups fetched: ${allGroups.length}`);
+            const group = allGroups.find(g => g && g.name === runnerGroupName);
+            if (!group) {
+              const availableGroupNames = allGroups.map(g => g.name).join(", ");
+              core.info(`Available runner groups: ${availableGroupNames || "(none)"}`);
+              core.setFailed(`❌ Runner Group '${runnerGroupName}' not found in organization '${owner}'.`);
+              return;
+            }
+            core.info(`✅ Runner Group '${runnerGroupName}' found. ID: ${group.id}`);
 
-            HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" \
-              -H "Authorization: Bearer $GH_TOKEN" \
-              -H "Accept: application/vnd.github+json" \
-              -H "X-GitHub-Api-Version: 2026-03-10" \
-              "https://api.github.com/orgs/$ORG/actions/runner-groups?per_page=$PER_PAGE&page=$PAGE")
+            // 3. リポジトリのIDを取得
+            let repoData;
+            try {
+              const response = await github.rest.repos.get({
+                owner: owner,
+                repo: repo,
+                headers: {
+                  "X-GitHub-Api-Version": "2026-03-10"
+                }
+              });
+              repoData = response.data;
+            } catch (error) {
+              core.setFailed(`❌ Failed to get repository info for '${repo}': [${error.status}] ${error.message}`);
+              return;
+            }
+            core.info(`✅ Repository '${repo}' found. ID: ${repoData.id}`);
 
-            HTTP_CODE=$(echo "$HTTP_RESPONSE" | tail -n1)
-            BODY=$(echo "$HTTP_RESPONSE" | sed '$d')
-
-            if [ "$HTTP_CODE" != "200" ]; then
-              echo "❌ Failed to list runner groups. Status: $HTTP_CODE"
-              echo "Body: $BODY"
-              exit 1
-            fi
-
-            PAGE_COUNT=$(echo "$BODY" | jq '.runner_groups | length')
-            echo "✅ Page $PAGE fetched. Groups in page: $PAGE_COUNT"
-
-            if [ "$PAGE_COUNT" -gt 0 ]; then
-              echo "$BODY" | jq -r '.runner_groups[] | "- ID: \(.id), Name: \(.name), Visibility: \(.visibility), Default: \(.default)"'
-            fi
-
-            TOTAL=$((TOTAL + PAGE_COUNT))
-
-            if [ "$PAGE_COUNT" -lt "$PER_PAGE" ]; then
-              break
-            fi
-
-            PAGE=$((PAGE + 1))
-          done
-
-          echo "✅ Total runner groups fetched: $TOTAL"
-
-      # - name: Add Repository to Runner Group
-      #   uses: actions/github-script@v8
-      #   env:
-      #     REPO_NAME: ${{ env.REPO_NAME }}
-      #   with:
-      #     github-token: ${{ env.GH_TOKEN }}
-      #     script: |
-      #       const owner = context.repo.owner;
-      #       const repo = process.env.REPO_NAME;
-      #       const environment = "${{ github.event.inputs.environment }}".toLowerCase();
-      #
-      #       // Debug: token identity/permission context (no secret output)
-      #       core.info("Debugging token identity and permission context...");
-      #       try {
-      #         const me = await github.rest.users.getAuthenticated();
-      #         core.info(`✅ whoami (GET /user): login='${me.data.login}', type='${me.data.type}'`);
-      #       } catch (error) {
-      #         core.info(`⚠️ whoami (GET /user) unavailable: [${error.status}] ${error.message}`);
-      #       }
-      #
-      #       try {
-      #         const repoResp = await github.rest.repos.get({
-      #           owner,
-      #           repo,
-      #           headers: {
-      #             "X-GitHub-Api-Version": "2026-03-10"
-      #           }
-      #         });
-      #         const perms = repoResp.data.permissions;
-      #         core.info(`✅ Repo visibility check: full_name='${repoResp.data.full_name}', private=${repoResp.data.private}`);
-      #         if (perms) {
-      #           core.info(`✅ Repo permissions from token context: ${JSON.stringify(perms)}`);
-      #         } else {
-      #           core.info("⚠️ Repo permissions field not present in response.");
-      #         }
-      #       } catch (error) {
-      #         core.setFailed(`❌ Failed to read repository permission context: [${error.status}] ${error.message}`);
-      #         return;
-      #       }
-      #
-      #       // 1. environment → RunnerGroup名のマッピング
-      #       const groupNameMap = { dev: "AEGIS-RunnerGroup-DEV", val: "AEGIS-RunnerGroup-VAL", prd: "AEGIS-RunnerGroup" };
-      #       const runnerGroupName = groupNameMap[environment];
-      #       if (!runnerGroupName) {
-      #         core.setFailed(`❌ Unknown environment: ${environment}`);
-      #         return;
-      #       }
-      #       core.info(`Target Runner Group: ${runnerGroupName}`);
-      #
-      #       // 2. ページネーション対応でRunnerGroupのIDを検索
-      #       let allGroups;
-      #       try {
-      #         allGroups = await github.paginate(
-      #           github.rest.actions.listSelfHostedRunnerGroupsForOrg,
-      #           {
-      #             org: owner,
-      #             per_page: 100,
-      #             headers: {
-      #               "X-GitHub-Api-Version": "2026-03-10"
-      #             }
-      #           },
-      #           (response) => {
-      #             if (Array.isArray(response.data)) {
-      #               return response.data;
-      #             }
-      #             return response.data?.runner_groups ?? [];
-      #           }
-      #         );
-      #       } catch (error) {
-      #         core.setFailed(`❌ Failed to list runner groups: [${error.status}] ${error.message}`);
-      #         return;
-      #       }
-      #       core.info(`Runner allGroups fetched: ${allGroups.length}`);
-      #       const groups = allGroups.filter(g => g && g.name);
-      #       core.info(`Runner groups fetched: ${groups.length}`);
-      #       const group = groups.find(g => g.name === runnerGroupName);
-      #       if (!group) {
-      #         const availableGroupNames = groups.map(g => g.name).join(", ");
-      #         core.info(`Available runner groups: ${availableGroupNames || "(none)"}`);
-      #         core.setFailed(`❌ Runner Group '${runnerGroupName}' not found in organization '${owner}'.`);
-      #         return;
-      #       }
-      #       core.info(`✅ Runner Group '${runnerGroupName}' found. ID: ${group.id}`);
-      #
-      #       // 3. リポジトリのIDを取得
-      #       let repoData;
-      #       try {
-      #         const response = await github.rest.repos.get({
-      #           owner: owner,
-      #           repo: repo,
-      #           headers: {
-      #             "X-GitHub-Api-Version": "2026-03-10"
-      #           }
-      #         });
-      #         repoData = response.data;
-      #       } catch (error) {
-      #         core.setFailed(`❌ Failed to get repository info for '${repo}': [${error.status}] ${error.message}`);
-      #         return;
-      #       }
-      #       core.info(`✅ Repository '${repo}' found. ID: ${repoData.id}`);
-      #
-      #       // 4. リポジトリをRunnerGroupのRepositoryAccessに追加
-      #       core.info(`Adding repository '${repo}' to Runner Group '${runnerGroupName}'...`);
-      #       try {
-      #         await github.rest.actions.addRepoAccessToSelfHostedRunnerGroupInOrg({
-      #           org: owner,
-      #           runner_group_id: group.id,
-      #           repository_id: repoData.id,
-      #           headers: {
-      #             "X-GitHub-Api-Version": "2026-03-10"
-      #           }
-      #         });
-      #         core.info(`✅ Repository '${repo}' successfully added to Runner Group '${runnerGroupName}'.`);
-      #       } catch (error) {
-      #         core.setFailed(`❌ Failed to add repository to Runner Group '${runnerGroupName}': [${error.status}] ${error.message}`);
-      #       }
+            // 4. リポジトリをRunnerGroupのRepositoryAccessに追加
+            core.info(`Adding repository '${repo}' to Runner Group '${runnerGroupName}'...`);
+            try {
+              await github.rest.actions.addRepoAccessToSelfHostedRunnerGroupInOrg({
+                org: owner,
+                runner_group_id: group.id,
+                repository_id: repoData.id,
+                headers: {
+                  "X-GitHub-Api-Version": "2026-03-10"
+                }
+              });
+              core.info(`✅ Repository '${repo}' successfully added to Runner Group '${runnerGroupName}'.`);
+            } catch (error) {
+              core.setFailed(`❌ Failed to add repository to Runner Group '${runnerGroupName}': [${error.status}] ${error.message}`);
+            }
 
       - name: Configure PR Merge Policy (Allow Merge Commits Only)
         run: |
