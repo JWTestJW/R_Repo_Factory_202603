@@ -317,10 +317,39 @@ jobs:
           script: |
             const owner = context.repo.owner;
             const repo = process.env.REPO_NAME;
-            const environment = "${{ github.event.inputs.environment }}";
+            const environment = "${{ github.event.inputs.environment }}".toLowerCase();
+
+            // Debug: token identity/permission context (no secret output)
+            core.info("Debugging token identity and permission context...");
+            try {
+              const me = await github.rest.users.getAuthenticated();
+              core.info(`✅ whoami (GET /user): login='${me.data.login}', type='${me.data.type}'`);
+            } catch (error) {
+              core.info(`⚠️ whoami (GET /user) unavailable: [${error.status}] ${error.message}`);
+            }
+
+            try {
+              const repoResp = await github.rest.repos.get({
+                owner,
+                repo,
+                headers: {
+                  "X-GitHub-Api-Version": "2026-03-10"
+                }
+              });
+              const perms = repoResp.data.permissions;
+              core.info(`✅ Repo visibility check: full_name='${repoResp.data.full_name}', private=${repoResp.data.private}`);
+              if (perms) {
+                core.info(`✅ Repo permissions from token context: ${JSON.stringify(perms)}`);
+              } else {
+                core.info("⚠️ Repo permissions field not present in response.");
+              }
+            } catch (error) {
+              core.setFailed(`❌ Failed to read repository permission context: [${error.status}] ${error.message}`);
+              return;
+            }
 
             // 1. environment → RunnerGroup名のマッピング
-            const groupNameMap = { DEV: "AEGIS-DEV", VAL: "AEGIS-VAL", PRD: "AEGIS" };
+            const groupNameMap = { dev: "AEGIS-RunnerGroup-DEV", val: "AEGIS-RunnerGroup-VAL", prd: "AEGIS-RunnerGroup" };
             const runnerGroupName = groupNameMap[environment];
             if (!runnerGroupName) {
               core.setFailed(`❌ Unknown environment: ${environment}`);
