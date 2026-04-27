@@ -259,6 +259,55 @@ jobs:
           echo "❌ Timeout: Repository creation could not be confirmed."
           exit 1
 
+      - name: Debug List Runner Groups via curl
+        run: |
+          # 厳格モード: エラー時は即終了
+          set -euo pipefail
+          trap 'echo "❌ Error in Debug List Runner Groups via curl step (line $LINENO). Check operations above."' ERR
+
+          ORG="${{ github.repository_owner }}"
+          PAGE=1
+          PER_PAGE=100
+          TOTAL=0
+
+          echo "Listing self-hosted runner groups for organization: $ORG"
+
+          while true; do
+            echo "Fetching runner groups page $PAGE..."
+
+            HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              "https://api.github.com/orgs/$ORG/actions/runner-groups?per_page=$PER_PAGE&page=$PAGE")
+
+            HTTP_CODE=$(echo "$HTTP_RESPONSE" | tail -n1)
+            BODY=$(echo "$HTTP_RESPONSE" | sed '$d')
+
+            if [ "$HTTP_CODE" != "200" ]; then
+              echo "❌ Failed to list runner groups. Status: $HTTP_CODE"
+              echo "Body: $BODY"
+              exit 1
+            fi
+
+            PAGE_COUNT=$(echo "$BODY" | jq '.runner_groups | length')
+            echo "✅ Page $PAGE fetched. Groups in page: $PAGE_COUNT"
+
+            if [ "$PAGE_COUNT" -gt 0 ]; then
+              echo "$BODY" | jq -r '.runner_groups[] | "- ID: \(.id), Name: \(.name), Visibility: \(.visibility), Default: \(.default)"'
+            fi
+
+            TOTAL=$((TOTAL + PAGE_COUNT))
+
+            if [ "$PAGE_COUNT" -lt "$PER_PAGE" ]; then
+              break
+            fi
+
+            PAGE=$((PAGE + 1))
+          done
+
+          echo "✅ Total runner groups fetched: $TOTAL"
+
       - name: Add Repository to Runner Group
         uses: actions/github-script@v8
         env:
