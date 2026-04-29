@@ -1,0 +1,155 @@
+# ================================================
+# 機能概要
+# -----------------------------------------------
+# このワークフローは、手動実行を契機に対象リポジトリの存在を確認し、
+# GitHub API を使用して指定リポジトリのルールセット情報を取得してログ出力します。
+#
+# 実行条件：
+# ・workflow_dispatch（手動実行）時
+#
+# 主な処理：
+# ・GitHub App トークンを生成して権限を取得（Generate App Token）
+# ・入力された repo_name を基に対象リポジトリの存在を検証
+# ・対象リポジトリの ruleset 一覧をページングで取得
+# ・各 ruleset の詳細情報を取得して JSON でログ出力
+# ================================================
+
+name: Repo Factory - Export Repository Rulesets
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo_name:
+        description: "Name of the repository to export rulesets from"
+        required: true
+        default: "AEGIS-PRD-S-xxxx-yyyy-zzzz-dev"
+
+jobs:
+  export-repo-rulesets:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Generate App Token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.CREATE_REPO_CLIENT_ID }}
+          private-key: ${{ secrets.CREATE_REPO_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Set GH_TOKEN
+        run: echo "GH_TOKEN=${{ steps.app-token.outputs.token }}" >> $GITHUB_ENV
+
+      - name: Validate repository existence
+        run: |
+          # 厳格モード: エラー時は即終了
+          set -euo pipefail
+
+          OWNER="${{ github.repository_owner }}"
+          REPO_NAME="${{ github.event.inputs.repo_name }}"
+
+          echo "Validating repository: $REPO_NAME"
+
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
+            "https://api.github.com/repos/$OWNER/$REPO_NAME")
+
+          if [ "$STATUS" = "404" ]; then
+            echo "❌ Repository ($REPO_NAME) not found."
+            exit 1
+          elif [ "$STATUS" != "200" ]; then
+            echo "❌ Failed to validate repository existence. Status: $STATUS"
+            exit 1
+          fi
+
+          echo "✅ Repository validation passed."
+
+      - name: Fetch and print repository rulesets
+        run: |
+          # 厳格モード: エラー時は即終了
+          set -euo pipefail
+          trap 'echo "❌ Error in Fetch and print repository rulesets step (line $LINENO). Check operations above."' ERR
+
+          OWNER="${{ github.repository_owner }}"
+          REPO_NAME="${{ github.event.inputs.repo_name }}"
+
+          echo "Fetching rulesets from repository: $REPO_NAME"
+
+          ALL_RULESETS="[]"
+          PAGE=1
+          PER_PAGE=100
+
+          # ---------------------------------------------------
+          # 1. ルールセット一覧をページングで取得
+          # ---------------------------------------------------
+          while true; do
+            REQUEST_URL="https://api.github.com/repos/$OWNER/$REPO_NAME/rulesets?per_page=$PER_PAGE&page=$PAGE"
+
+            HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              "$REQUEST_URL")
+
+            HTTP_CODE=$(echo "$HTTP_RESPONSE" | tail -n1)
+            BODY=$(echo "$HTTP_RESPONSE" | sed '$d')
+
+            if [ "$HTTP_CODE" != "200" ]; then
+              echo "❌ Failed to fetch ruleset list. Status: $HTTP_CODE"
+              echo "⬇️ Response body:"
+              echo "$BODY"
+              exit 1
+            fi
+
+            PAGE_RULESET_IDS=$(echo "$BODY" | jq -r '.[].id')
+            PAGE_RULESET_COUNT=$(echo "$BODY" | jq 'length')
+
+            if [ "$PAGE_RULESET_COUNT" -eq 0 ]; then
+              echo "✅ Ruleset list pagination completed at page $PAGE."
+              break
+            fi
+
+            echo "✅ Page $PAGE fetched: $PAGE_RULESET_COUNT ruleset(s)."
+
+            # ---------------------------------------------------
+            # 2. 各ルールセットの詳細情報を取得
+            # ---------------------------------------------------
+            while IFS= read -r RULESET_ID; do
+              if [ -z "$RULESET_ID" ]; then
+                continue
+              fi
+
+              DETAIL_URL="https://api.github.com/repos/$OWNER/$REPO_NAME/rulesets/$RULESET_ID"
+              DETAIL_RESPONSE=$(curl -s -w "\n%{http_code}" \
+                -H "Authorization: Bearer $GH_TOKEN" \
+                -H "Accept: application/vnd.github+json" \
+                -H "X-GitHub-Api-Version: 2026-03-10" \
+                "$DETAIL_URL")
+
+              DETAIL_HTTP_CODE=$(echo "$DETAIL_RESPONSE" | tail -n1)
+              DETAIL_BODY=$(echo "$DETAIL_RESPONSE" | sed '$d')
+
+              if [ "$DETAIL_HTTP_CODE" != "200" ]; then
+                echo "❌ Failed to fetch ruleset detail (id: $RULESET_ID). Status: $DETAIL_HTTP_CODE"
+                echo "⬇️ Response body:"
+                echo "$DETAIL_BODY"
+                exit 1
+              fi
+
+              ALL_RULESETS=$(echo "$ALL_RULESETS" "$DETAIL_BODY" | jq -s '.[0] + [.[1]]')
+              echo "✅ Ruleset detail fetched (id: $RULESET_ID)."
+            done <<< "$PAGE_RULESET_IDS"
+
+            PAGE=$((PAGE + 1))
+          done
+
+          TOTAL_RULESETS=$(echo "$ALL_RULESETS" | jq 'length')
+
+          echo "✅ Total repository rulesets fetched: $TOTAL_RULESETS"
+          echo "⬇️ Repository rulesets JSON:"
+          echo "$ALL_RULESETS" | jq '.'
