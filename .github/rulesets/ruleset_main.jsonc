@@ -17,7 +17,7 @@
     {
       // Repository Admin (Maintainer) role
       // 5: Maintainer (管理者権限)
-      "actor_id": 1,
+      "actor_id": 3,
       "actor_type": "RepositoryRole",
       "bypass_mode": "always"
     }
