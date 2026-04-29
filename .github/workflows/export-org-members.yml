@@ -17,7 +17,7 @@
 # ・取得したメンバー情報を保持したまま、/users/{username} の詳細を user 配下に追加
 # ・/orgs/{org}/memberships/{username} の結果を membership 配下に追加
 # ・メンバー情報をJSON形式で保存
-# ・artifacts として提供（ダウンロード可能、保留期間は入力値で指定）
+# ・artifacts として提供（ダウンロード可能、保留期間はリポジトリ/組織の既定設定を適用）
 #
 # 取得されるユーザー種別：
 # ・member_role=all: Organization Admin / Organization Member / 非公開メンバー(権限に応じて) / EMU ユーザー
@@ -43,15 +43,6 @@ on:
           - admin
           - member
         default: "all"
-      retention_days:
-        description: |
-          Artifact retention period in days.
-          - GitHub.com default: 90 days
-          - GHES/GHEC: subject to enterprise settings (typically 1-90 days)
-          - Min: 1 day, Max: 90 days
-        required: true
-        type: string
-        default: "30"
 
 jobs:
   export-members:
@@ -68,28 +59,6 @@ jobs:
 
       - name: Set GH_TOKEN
         run: echo "GH_TOKEN=${{ steps.app-token.outputs.token }}" >> $GITHUB_ENV
-
-      - name: Validate Retention Days
-        run: |
-          # 厳格モード: エラー時は即終了
-          set -euo pipefail
-
-          RETENTION_DAYS="${{ github.event.inputs.retention_days }}"
-
-          # 数値チェック
-          if ! [[ "$RETENTION_DAYS" =~ ^[0-9]+$ ]]; then
-            echo "❌ Retention days must be a positive integer. Got: $RETENTION_DAYS"
-            exit 1
-          fi
-
-          # 範囲チェック (1-90 days)
-          if [ "$RETENTION_DAYS" -lt 1 ] || [ "$RETENTION_DAYS" -gt 90 ]; then
-            echo "❌ Retention days must be between 1 and 90. Got: $RETENTION_DAYS"
-            exit 1
-          fi
-
-          echo "✅ Retention days validation OK: $RETENTION_DAYS days"
-          echo "RETENTION_DAYS=$RETENTION_DAYS" >> $GITHUB_ENV
 
       - name: Set Output File Names
         run: |
@@ -268,7 +237,6 @@ jobs:
           path: |
             ${{ env.ORG_MEMBERS_FILE }}
             ${{ env.MEMBERS_SUMMARY_FILE }}
-          retention-days: ${{ env.RETENTION_DAYS }}
 
       - name: Show Summary
         run: |
