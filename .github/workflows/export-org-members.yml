@@ -1,0 +1,250 @@
+# ================================================
+# 機能概要
+# -----------------------------------------------
+# このワークフローは、手動実行を契機に、
+# 現在の組織メンバー情報を取得し、JSON形式で保存します。
+#
+# 対応環境：
+# ・GitHub.com / GitHub Enterprise Server (GHES) / GitHub Enterprise Cloud (GHEC)
+# ・EMU (Enterprise Managed Users) 管理下のユーザーも含む
+#
+# 実行条件：
+# ・workflow_dispatch（手動実行）時
+#
+# 主な処理：
+# ・GitHub App トークンを生成して権限を取得
+# ・/orgs/{org}/members で組織メンバーを取得（role 指定対応）
+# ・取得したメンバー情報を保持したまま、/user/{account_id} の詳細を detailInfo 配下に追加
+# ・メンバー情報をJSON形式で保存
+# ・artifacts として提供（ダウンロード可能、保留期間は入力値で指定）
+#
+# 取得されるユーザー種別：
+# ・member_role=all: Organization Admin / Organization Member / 非公開メンバー(権限に応じて) / EMU ユーザー
+# ・member_role=admin: Organization Admin
+# ・member_role=member: Organization Member
+#
+# ================================================
+
+name: Export Organization Members
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      member_role:
+        description: "Member role filter for /members endpoint: 'all' / 'admin' / 'member'"
+        required: true
+        type: choice
+        options:
+          - all
+          - admin
+          - member
+        default: "all"
+      retention_days:
+        description: |
+          Artifact retention period in days.
+          - GitHub.com default: 90 days
+          - GHES/GHEC: subject to enterprise settings (typically 1-90 days)
+          - Min: 1 day, Max: 90 days
+        required: true
+        type: string
+        default: "30"
+
+jobs:
+  export-members:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Generate App Token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.CREATE_REPO_CLIENT_ID }}
+          private-key: ${{ secrets.CREATE_REPO_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Set GH_TOKEN
+        run: echo "GH_TOKEN=${{ steps.app-token.outputs.token }}" >> $GITHUB_ENV
+
+      - name: Validate Retention Days
+        run: |
+          # 厳格モード: エラー時は即終了
+          set -euo pipefail
+
+          RETENTION_DAYS="${{ github.event.inputs.retention_days }}"
+
+          # 数値チェック
+          if ! [[ "$RETENTION_DAYS" =~ ^[0-9]+$ ]]; then
+            echo "❌ Retention days must be a positive integer. Got: $RETENTION_DAYS"
+            exit 1
+          fi
+
+          # 範囲チェック (1-90 days)
+          if [ "$RETENTION_DAYS" -lt 1 ] || [ "$RETENTION_DAYS" -gt 90 ]; then
+            echo "❌ Retention days must be between 1 and 90. Got: $RETENTION_DAYS"
+            exit 1
+          fi
+
+          echo "✅ Retention days validation OK: $RETENTION_DAYS days"
+          echo "RETENTION_DAYS=$RETENTION_DAYS" >> $GITHUB_ENV
+
+      - name: Set Output File Names
+        run: |
+          # 厳格モード: エラー時は即終了
+          set -euo pipefail
+
+          DATE_SUFFIX=$(date -u +"%Y%m%d")
+          ORG_MEMBERS_FILE="org-members-$DATE_SUFFIX.json"
+          MEMBERS_SUMMARY_FILE="members-summary-$DATE_SUFFIX.txt"
+
+          echo "ORG_MEMBERS_FILE=$ORG_MEMBERS_FILE" >> $GITHUB_ENV
+          echo "MEMBERS_SUMMARY_FILE=$MEMBERS_SUMMARY_FILE" >> $GITHUB_ENV
+          echo "✅ Output files: $ORG_MEMBERS_FILE, $MEMBERS_SUMMARY_FILE"
+
+      - name: Fetch Organization Members
+        run: |
+          # 厳格モード: エラー時は即終了
+          set -euo pipefail
+
+          OWNER="${{ github.repository_owner }}"
+          OUTPUT_FILE="$ORG_MEMBERS_FILE"
+          MEMBER_ROLE="${{ github.event.inputs.member_role }}"
+
+          echo "Fetching members for organization: $OWNER"
+          echo "Member role filter: $MEMBER_ROLE"
+          echo "✅ Fetch mode: /orgs/{org}/members"
+
+          # 初期化
+          ALL_MEMBERS="[]"
+          PAGE=1
+          PER_PAGE=100
+
+          # ページネーションで全メンバーを取得
+          while true; do
+            echo "Fetching page $PAGE..."
+            REQUEST_URL="https://api.github.com/orgs/$OWNER/members?role=$MEMBER_ROLE&per_page=$PER_PAGE&page=$PAGE"
+            
+            HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              "$REQUEST_URL")
+
+            HTTP_CODE=$(echo "$HTTP_RESPONSE" | tail -n1)
+            BODY=$(echo "$HTTP_RESPONSE" | sed '$d')
+
+            if [ "$HTTP_CODE" != "200" ]; then
+              echo "❌ Failed to fetch members. Status: $HTTP_CODE"
+              echo "Body: $BODY"
+              exit 1
+            fi
+
+            # ページのメンバーを追加
+            PAGE_MEMBERS=$(echo "$BODY" | jq '.')
+            PAGE_COUNT=$(echo "$PAGE_MEMBERS" | jq 'length')
+            
+            if [ "$PAGE_COUNT" -eq 0 ]; then
+              echo "✅ All members fetched (page $PAGE returned 0 members)"
+              break
+            fi
+
+            # 累積メンバー情報をマージ
+            ALL_MEMBERS=$(echo "$ALL_MEMBERS" "$PAGE_MEMBERS" | jq -s '.[0] + .[1]')
+            
+            echo "✅ Page $PAGE: $PAGE_COUNT members added"
+            
+            # 次ページ
+            PAGE=$((PAGE + 1))
+          done
+
+          # JSON形式で保存
+          echo "$ALL_MEMBERS" | jq '.' > "$OUTPUT_FILE"
+
+          MEMBER_COUNT=$(echo "$ALL_MEMBERS" | jq 'length')
+          echo "✅ Total members fetched: $MEMBER_COUNT"
+          echo "MEMBER_COUNT=$MEMBER_COUNT" >> $GITHUB_ENV
+
+      - name: Enrich Member Data with Additional Info
+        run: |
+          # 厳格モード: エラー時は即終了
+          set -euo pipefail
+
+          OUTPUT_FILE="$ORG_MEMBERS_FILE"
+          OWNER="${{ github.repository_owner }}"
+
+          echo "Enriching member data with additional information..."
+
+          # 既存のメンバー情報を読む
+          MEMBERS=$(cat "$OUTPUT_FILE")
+
+          # 各メンバーの詳細情報を取得
+          ENRICHED_MEMBERS=$(echo "$MEMBERS" | jq -c '.[]' | while read -r member; do
+            USER_ID=$(echo "$member" | jq -r '.id')
+            
+            # ユーザーの詳細情報を取得
+            USER_RESPONSE=$(curl -s \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              "https://api.github.com/user/$USER_ID")
+            
+            # 原始のmemberを変更せず、詳細情報はdetailInfo配下にそのまま保持
+            echo "$member" | jq --argjson detail "$USER_RESPONSE" '. + { detailInfo: $detail }'
+          done | jq -s '.')
+
+          # 保存
+          echo "$ENRICHED_MEMBERS" | jq '.' > "$OUTPUT_FILE"
+
+          echo "✅ Member data enrichment complete"
+
+      - name: Generate Summary Report
+        run: |
+          # 厳格モード: エラー時は即終了
+          set -euo pipefail
+
+          OUTPUT_FILE="$ORG_MEMBERS_FILE"
+          REPORT_FILE="$MEMBERS_SUMMARY_FILE"
+          OWNER="${{ github.repository_owner }}"
+
+          echo "---------------------------------------------------" | tee "$REPORT_FILE"
+          echo "Organization Members Export Report" | tee -a "$REPORT_FILE"
+          echo "---------------------------------------------------" | tee -a "$REPORT_FILE"
+          echo "Organization: $OWNER" | tee -a "$REPORT_FILE"
+          echo "Exported at: $(date -u +'%Y-%m-%dT%H:%M:%SZ')" | tee -a "$REPORT_FILE"
+          echo "" | tee -a "$REPORT_FILE"
+
+          TOTAL_COUNT=$(jq 'length' "$OUTPUT_FILE")
+          echo "Total members exported: $TOTAL_COUNT" | tee -a "$REPORT_FILE"
+          echo "" | tee -a "$REPORT_FILE"
+
+          echo "User Type Breakdown:" | tee -a "$REPORT_FILE"
+          jq -r 'group_by(.detailInfo.type) | map({type: (.[0].detailInfo.type // "Unknown"), count: length}) | .[] | "\(.type): \(.count)"' "$OUTPUT_FILE" | tee -a "$REPORT_FILE"
+          echo "" | tee -a "$REPORT_FILE"
+
+          echo "Sample (first 3 members):" | tee -a "$REPORT_FILE"
+          jq '.[0:3] | map({login, id, role, detailInfo})' "$OUTPUT_FILE" | tee -a "$REPORT_FILE"
+
+          echo "" | tee -a "$REPORT_FILE"
+          echo "---------------------------------------------------" | tee -a "$REPORT_FILE"
+          echo "Files available for download:" | tee -a "$REPORT_FILE"
+          echo "  - $ORG_MEMBERS_FILE (detailed data)" | tee -a "$REPORT_FILE"
+          echo "  - $MEMBERS_SUMMARY_FILE (summary report)" | tee -a "$REPORT_FILE"
+          echo "---------------------------------------------------" | tee -a "$REPORT_FILE"
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: organization-members
+          path: |
+            ${{ env.ORG_MEMBERS_FILE }}
+            ${{ env.MEMBERS_SUMMARY_FILE }}
+          retention-days: ${{ env.RETENTION_DAYS }}
+
+      - name: Show Summary
+        run: |
+          # 厳格モード: エラー時は即終了
+          set -euo pipefail
+
+          cat "$MEMBERS_SUMMARY_FILE"
