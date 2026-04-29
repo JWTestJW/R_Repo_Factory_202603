@@ -96,9 +96,10 @@ jobs:
           set -euo pipefail
 
           OWNER="${{ github.repository_owner }}"
+          MEMBER_ROLE="${{ github.event.inputs.member_role }}"
           DATE_SUFFIX=$(date -u +"%Y%m%d")
-          ORG_MEMBERS_FILE="org-members-$OWNER-$DATE_SUFFIX.json"
-          MEMBERS_SUMMARY_FILE="members-summary-$OWNER-$DATE_SUFFIX.txt"
+          ORG_MEMBERS_FILE="$OWNER-$MEMBER_ROLE-members-$DATE_SUFFIX.json"
+          MEMBERS_SUMMARY_FILE="$OWNER-$MEMBER_ROLE-members-summary-$DATE_SUFFIX.txt"
 
           echo "ORG_MEMBERS_FILE=$ORG_MEMBERS_FILE" >> $GITHUB_ENV
           echo "MEMBERS_SUMMARY_FILE=$MEMBERS_SUMMARY_FILE" >> $GITHUB_ENV
