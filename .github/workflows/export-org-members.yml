@@ -95,9 +95,10 @@ jobs:
           # 厳格モード: エラー時は即終了
           set -euo pipefail
 
+          OWNER="${{ github.repository_owner }}"
           DATE_SUFFIX=$(date -u +"%Y%m%d")
-          ORG_MEMBERS_FILE="org-members-$DATE_SUFFIX.json"
-          MEMBERS_SUMMARY_FILE="members-summary-$DATE_SUFFIX.txt"
+          ORG_MEMBERS_FILE="org-members-$OWNER-$DATE_SUFFIX.json"
+          MEMBERS_SUMMARY_FILE="members-summary-$OWNER-$DATE_SUFFIX.txt"
 
           echo "ORG_MEMBERS_FILE=$ORG_MEMBERS_FILE" >> $GITHUB_ENV
           echo "MEMBERS_SUMMARY_FILE=$MEMBERS_SUMMARY_FILE" >> $GITHUB_ENV
