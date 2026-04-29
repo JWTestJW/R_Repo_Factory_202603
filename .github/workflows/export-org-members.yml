@@ -14,7 +14,8 @@
 # 主な処理：
 # ・GitHub App トークンを生成して権限を取得
 # ・/orgs/{org}/members で組織メンバーを取得（role 指定対応）
-# ・取得したメンバー情報を保持したまま、/user/{account_id} の詳細を detailInfo 配下に追加
+# ・取得したメンバー情報を保持したまま、/users/{username} の詳細を user 配下に追加
+# ・/orgs/{org}/memberships/{username} の結果を membership 配下に追加
 # ・メンバー情報をJSON形式で保存
 # ・artifacts として提供（ダウンロード可能、保留期間は入力値で指定）
 #
@@ -181,19 +182,44 @@ jobs:
           # 既存のメンバー情報を読む
           MEMBERS=$(cat "$OUTPUT_FILE")
 
-          # 各メンバーの詳細情報を取得
+          # 各メンバーの詳細情報とmembership情報を取得
           ENRICHED_MEMBERS=$(echo "$MEMBERS" | jq -c '.[]' | while read -r member; do
-            USER_ID=$(echo "$member" | jq -r '.id')
+            USERNAME=$(echo "$member" | jq -r '.login')
             
-            # ユーザーの詳細情報を取得
-            USER_RESPONSE=$(curl -s \
+            # ユーザーの詳細情報を取得 (/users/{username})
+            USER_RESPONSE=$(curl -s -w "\n%{http_code}" \
               -H "Authorization: Bearer $GH_TOKEN" \
               -H "Accept: application/vnd.github+json" \
               -H "X-GitHub-Api-Version: 2026-03-10" \
-              "https://api.github.com/user/$USER_ID")
+              "https://api.github.com/users/$USERNAME")
+
+            USER_HTTP_CODE=$(echo "$USER_RESPONSE" | tail -n1)
+            USER_BODY=$(echo "$USER_RESPONSE" | sed '$d')
+
+            if [ "$USER_HTTP_CODE" != "200" ]; then
+              echo "❌ Failed to fetch user detail for '$USERNAME'. Status: $USER_HTTP_CODE"
+              echo "Body: $USER_BODY"
+              exit 1
+            fi
+
+            # membership情報を取得 (/orgs/{org}/memberships/{username})
+            MEMBERSHIP_RESPONSE=$(curl -s -w "\n%{http_code}" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              "https://api.github.com/orgs/$OWNER/memberships/$USERNAME")
+
+            MEMBERSHIP_HTTP_CODE=$(echo "$MEMBERSHIP_RESPONSE" | tail -n1)
+            MEMBERSHIP_BODY=$(echo "$MEMBERSHIP_RESPONSE" | sed '$d')
+
+            if [ "$MEMBERSHIP_HTTP_CODE" != "200" ]; then
+              echo "❌ Failed to fetch membership detail for '$USERNAME'. Status: $MEMBERSHIP_HTTP_CODE"
+              echo "Body: $MEMBERSHIP_BODY"
+              exit 1
+            fi
             
-            # 原始のmemberを変更せず、詳細情報はdetailInfo配下にそのまま保持
-            echo "$member" | jq --argjson detail "$USER_RESPONSE" '. + { detailInfo: $detail }'
+            # 原始のmemberを変更せず、詳細情報を user / membership 配下に保持
+            echo "$member" | jq --argjson user "$USER_BODY" --argjson membership "$MEMBERSHIP_BODY" '. + { user: $user, membership: $membership }'
           done | jq -s '.')
 
           # 保存
@@ -222,11 +248,11 @@ jobs:
           echo "" | tee -a "$REPORT_FILE"
 
           echo "User Type Breakdown:" | tee -a "$REPORT_FILE"
-          jq -r 'group_by(.detailInfo.type) | map({type: (.[0].detailInfo.type // "Unknown"), count: length}) | .[] | "\(.type): \(.count)"' "$OUTPUT_FILE" | tee -a "$REPORT_FILE"
+          jq -r 'group_by(.type) | map({type: (.[0].type // "Unknown"), count: length}) | .[] | "\(.type): \(.count)"' "$OUTPUT_FILE" | tee -a "$REPORT_FILE"
           echo "" | tee -a "$REPORT_FILE"
 
-          echo "Sample (first 3 members):" | tee -a "$REPORT_FILE"
-          jq '.[0:3] | map({login, id, role, detailInfo})' "$OUTPUT_FILE" | tee -a "$REPORT_FILE"
+          echo "Sample (first 2 members):" | tee -a "$REPORT_FILE"
+          jq '.[0:2] | map({login, id, type, user, membership})' "$OUTPUT_FILE" | tee -a "$REPORT_FILE"
 
           echo "" | tee -a "$REPORT_FILE"
           echo "---------------------------------------------------" | tee -a "$REPORT_FILE"
